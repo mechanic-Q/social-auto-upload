@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
+import inspect, re
 import os
 from datetime import datetime
 from pathlib import Path
@@ -362,10 +362,38 @@ class ToutiaoVideo(BaseVideoUploader):
         await file_input.set_input_files(self.thumbnail_path)
         await asyncio.sleep(2)
 
-        confirm = modal.locator('button:has-text("完成"), button:has-text("确定"), button:has-text("确认")').last
-        await confirm.wait_for(state="visible", timeout=15000)
-        await confirm.click()
-        await modal.wait_for(state="hidden", timeout=30000)
+        # 2026-09-06 定稿：确定按钮在封面图处理完成前是禁用态（网络慢时 >2s），
+        # 且该弹窗按钮 Playwright 定位器/JS click 均不可靠（isTrusted 校验）——
+        # 轮询等按钮可用（≤90s），再用 page.mouse 物理点击（可信事件）
+        box = None
+        for _ in range(30):
+            box = await page.evaluate(
+                """() => {
+                const btns = [...document.querySelectorAll('.m-dialog-edit button, div[role="dialog"] button')]
+                  .filter(b => /确定|完成|确认/.test(b.innerText.trim()) && !b.disabled
+                               && (b.offsetParent || b.getClientRects().length));
+                if (!btns.length) return null;
+                const r = btns[btns.length - 1].getBoundingClientRect();
+                return {x: r.x + r.width / 2, y: r.y + r.height / 2};
+            }""")
+            if box:
+                break
+            await asyncio.sleep(3)
+        if not box:
+            await page.screenshot(path="/tmp/toutiao_cover_debug.png", full_page=True)
+            raise RuntimeError("封面弹窗 90s 内无可用确认按钮（确定/完成/确认）")
+        await page.mouse.click(box["x"], box["y"])
+        toutiao_logger.info(_msg("🖱️", f"鼠标物理点击确认键 @({box['x']:.0f},{box['y']:.0f})"))
+        try:
+            await modal.wait_for(state="hidden", timeout=30000)
+        except Exception:
+            await page.screenshot(path="/tmp/toutiao_after_click.png", full_page=True)
+            info = await page.evaluate(
+                """() => [...document.querySelectorAll('.m-dialog-edit button, div[role="dialog"] button')]
+                .map(b => ({t: b.innerText.trim(), disabled: b.disabled,
+                            vis: !!(b.offsetParent || b.getClientRects().length)}))""")
+            toutiao_logger.error(_msg("😵", f"点击后弹窗仍在，按钮态: {info}"))
+            raise
         toutiao_logger.success(_msg("🥳", "封面已经设置完成"))
 
     async def set_activity(self, page: Page) -> None:
