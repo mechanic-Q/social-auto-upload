@@ -6,6 +6,9 @@
 - `kuaishou`
 - `xiaohongshu`
 - `bilibili`
+- `tencent`（视频号）
+- `youtube`
+- `toutiao`
 
 实现说明：
 
@@ -59,9 +62,29 @@ sau kuaishou login --account <account_name>
 sau kuaishou check --account <account_name>
 sau kuaishou upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --tags 运动,训练
 sau kuaishou upload-note --account <account_name> --images videos/1.png videos/2.png videos/3.png --title "图文标题" --note "图文示例" --tags 图文,测试
+sau kuaishou list-activities --account <account_name>
 ```
 
-## 小红书 CLI 子命令
+## 今日头条 CLI 子命令
+
+```bash
+sau toutiao login --account <account_name>
+sau toutiao check --account <account_name>
+sau toutiao upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --tags 科技,人工智能
+sau toutiao list-activities --account <account_name>
+```
+
+- 头条当前仅支持视频发布（`upload-video`），暂无图文/文章；发布走西瓜上传通道
+- 标题必填且不超过 300 字；话题最多 10 个（联想命中平台词库才生效，未命中自动跳过不阻断）
+- `--declaration "AI生成"` 等勾选"作品声明"区的声明项（常见：AI生成/自行拍摄/引用内容/虚构演绎）；
+  勾选失败时发布终止（不静默发布）。该页面无"声明原创"选项（需账号开通原创权益后才可能出现）
+- `--draft` 存草稿不发布（已实测）；`--activity` 在头条视频发布页不可用（实测无活动入口，
+  传了会明确报错终止），活动功能当前仅快手支持
+- 登录支持头条 APP / 抖音 APP 扫码
+
+## 小红书 CLI 子命令（已停用）
+
+> **⛔ 小红书通道已于 2026-09-05 停用**：现有浏览器自动化方式在该平台封号风险过高（多次实测）。调用会返回错误；恢复需将 `conf.py` 的 `XIAOHONGSHU_ENABLED` 改为 `True`。以下命令仅作历史参考。
 
 ```bash
 sau xiaohongshu login --account <account_name>
@@ -104,9 +127,59 @@ sau bilibili upload-video --account <account_name> --file videos/demo.mp4 --titl
 - 这类二维码图片本身就是给用户扫码的，agent 应优先直接展示/发送本地图片给用户
 - Bilibili 当前不走这套本地二维码图片托管链路，登录按上面的 Bilibili CLI 说明处理即可
 
+## 账号巡检（health）
+
+抖音与 B站支持只读巡检命令 `health`：登录态抓取账号处罚状态与作品状态、数据，输出 JSON 供 pipeline/agent 判断，不做任何发布操作。
+
+```bash
+sau douyin health --account <account_name> [--limit 30]
+sau bilibili health --account <account_name> [--limit 20]
+```
+
+返回结构：
+
+- `account`：账号维度。抖音含昵称/粉丝/作品数/处罚记录；B站含已发/待审计数
+- `works`：每条作品的状态与数据。抖音含 `flags`（审核中/仅自己可见/禁止播放等标志）、播放/点赞/评论/分享/收藏；B站含 `state`/`state_desc`/拒绝原因与播放数据
+- `summary`：聚合信号——异常状态作品清单、待审清单、被拒清单、播放中位数
+
+判断口径：
+
+- 处罚记录（抖音 `has_punished`）或 `works` 里出现"仅自己可见/禁止播放/被拒"= 平台侧处罚，需按平台申诉流程处理
+- 状态全部正常但播放中位数持续极低 = 低流量池（内容信号问题，不是违规），从封面点击率、前 3 秒留存、内容赛道入手
+
+快手、头条、小红书、视频号的巡检将在各平台 DOM 侦察后接入同一命令形态。
+
+## 创作活动与固定标签
+
+快手与头条支持"发布时参与创作活动"和"固定标签清单"：
+
+```bash
+# 活动发现：列出当前可参加的活动（JSON，只读不发布）
+sau kuaishou list-activities --account <account_name>
+sau toutiao list-activities --account <account_name>
+
+# 活动参与：发布时选中指定活动（活动名需与 list-activities 输出一致）
+sau kuaishou upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --activity "光合计划"
+```
+
+活动注意事项：
+
+- `--activity` 是精确承诺：发布页找不到该活动入口或匹配不到活动名时，发布**终止**而不是静默跳过
+- 只参加与内容真实相关的活动；无关活动会被平台判定为滥用，反而限流
+
+固定标签清单（Extra Tags）：
+
+- 在 `conf.py` 的 `PLATFORM_EXTRA_TAG_POOLS` 里按平台、按内容类型组维护（如 `news`、`tech`）
+- 发布时用 `--extra-tag-pool <组名>`（可重复）把对应组的标签追加在 `--tags` 之后
+- 不传 `--extra-tag-pool` 就不追加——避免把无关热门标签堆到每个视频上触发"滥用话题"限流
+
+```bash
+sau kuaishou upload-video ... --tags 科技 --extra-tag-pool tech --extra-tag-pool news
+```
+
 ## 定时发布
 
-抖音、快手、小红书的图文和视频上传，以及 Bilibili 的视频上传都支持 `--schedule`。只要传了 `--schedule`，CLI 就会自动切换到对应平台的定时发布策略；不传则默认立即发布。
+抖音、快手、小红书、头条的图文和视频上传，以及 Bilibili 的视频上传都支持 `--schedule`。只要传了 `--schedule`，CLI 就会自动切换到对应平台的定时发布策略；不传则默认立即发布。
 
 ```bash
 sau douyin upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --schedule "2026-03-24 21:30"
@@ -116,6 +189,7 @@ sau kuaishou upload-note --account <account_name> --images videos/1.png videos/2
 sau xiaohongshu upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --schedule "2026-03-24 21:30"
 sau xiaohongshu upload-note --account <account_name> --images videos/1.png videos/2.png videos/3.png --title "图文标题" --note "图文示例" --schedule "2026-03-24 21:30"
 sau bilibili upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --tid 249 --schedule "2026-03-24 21:30"
+sau toutiao upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --schedule "2026-03-24 21:30"
 ```
 
 ## 运行时参数

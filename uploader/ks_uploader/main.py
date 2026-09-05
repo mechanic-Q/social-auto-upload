@@ -30,6 +30,11 @@ KUAISHOU_MANAGE_URL_PATTERN = "**/article/manage/video?status=2&from=publish**"
 KUAISHOU_COOKIE_INVALID_SELECTOR = "div.names div.container div.name:text('机构服务')"
 KUAISHOU_PUBLISH_STRATEGY_IMMEDIATE = "immediate"
 KUAISHOU_PUBLISH_STRATEGY_SCHEDULED = "scheduled"
+# 发布页话题输入的实际上限未经官方文档确认，5 为保守值；超限截断时打警告。
+KUAISHOU_MAX_TAGS = 5
+# 活动入口（2026-09-06 实测）：表单"活动推荐"区直接内嵌活动卡片，css-module 哈希前的类名前缀稳定
+KUAISHOU_ACTIVITY_CARD_SELECTOR = '[class*="_activity__item_3v4ib_1"]'
+KUAISHOU_ACTIVITY_TITLE_SELECTOR = '[class*="_activity__item_main_title_"]'
 
 
 def _msg(emoji: str, text: str) -> str:
@@ -193,7 +198,7 @@ async def get_ks_cookie(
     qrcode_callback=None,
     headless: bool = LOCAL_CHROME_HEADLESS,
     poll_interval: int = 3,
-    max_checks: int = 100,
+    max_checks: int = 300,
     cdp_url: str | None = None,
 ):
     if headless:
@@ -279,6 +284,50 @@ async def get_ks_cookie(
     return result
 
 
+async def list_kuaishou_activities(account_file, headless: bool = LOCAL_CHROME_HEADLESS) -> list[dict]:
+    """活动发现：活动列表内嵌在发布表单里，需上传一条视频让表单渲染后读取卡片。
+    全程只读，不填任何字段、不点发布，上传完成后关闭页面即丢弃。"""
+    async with async_playwright() as playwright:
+        if LOCAL_CHROME_PATH:
+            browser = await playwright.chromium.launch(headless=headless, executable_path=LOCAL_CHROME_PATH)
+        else:
+            browser = await playwright.chromium.launch(headless=headless, channel="chromium")
+        context = await browser.new_context(storage_state=str(account_file))
+        context = await set_init_script(context)
+        try:
+            page = await context.new_page()
+            await page.goto(KUAISHOU_UPLOAD_URL)
+            await page.wait_for_url(KUAISHOU_UPLOAD_URL_PATTERN)
+
+            upload_btn = page.locator("button[class^='_upload-btn']")
+            await upload_btn.wait_for(state="visible", timeout=15000)
+            async with page.expect_file_chooser() as fc_info:
+                await upload_btn.click()
+            await (await fc_info.value).set_files(str(Path(__file__).parents[2] / "videos" / "demo.mp4"))
+            for _ in range(45):
+                await page.wait_for_timeout(2000)
+                if await page.locator("text=上传中").count() == 0:
+                    break
+            await page.wait_for_timeout(5000)
+            await page.evaluate(
+                """() => {
+                document.querySelectorAll('#react-joyride-portal, [id^=react-joyride-step]').forEach(e => {
+                    e.style.pointerEvents = 'none'; e.style.opacity = '0'; e.style.visibility = 'hidden';
+                });
+            }"""
+            )
+
+            probe = KSVideo(title="_probe", file_path="_probe.mp4", tags=[],
+                            publish_date=0, account_file=str(account_file))
+            cards = await probe._read_activity_cards(page)
+            if not cards:
+                kuaishou_logger.warning(_msg("😵", "表单已渲染但没有读到活动卡片，可能当前没有可参加的活动"))
+            return cards
+        finally:
+            await context.close()
+            await browser.close()
+
+
 class KSBaseUploader(BaseVideoUploader):
     def __init__(
         self,
@@ -358,26 +407,100 @@ class KSBaseUploader(BaseVideoUploader):
         await asyncio.sleep(2)
         kuaishou_logger.info(f"✅ 定时发布时间已设置为 {publish_date_str}")
 
+
     async def close_guide_overlay(self, page: Page) -> bool:
-        joyride_tooltip = page.locator('div[id^="react-joyride-step"] div[role="alertdialog"]')
+        # 新手引导遮罩有两种形态：react-joyride-step 弹层与 portal 聚光灯（会拦截点击）。
+        # 注意只能隐藏不能 remove——直接删 React 管理的节点会触发卸载错误导致整页白屏。
+        await page.evaluate(
+            """() => {
+            document.querySelectorAll('#react-joyride-portal, [id^=react-joyride-step]').forEach(e => {
+                e.style.pointerEvents = 'none';
+                e.style.opacity = '0';
+                e.style.visibility = 'hidden';
+            });
+        }"""
+        )
 
-        # 判断是否显示
-        if await joyride_tooltip.count() > 0 and await joyride_tooltip.first.is_visible():
-            print("检测到 Joyride 引导遮罩，正在关闭...")
+    def _activity_cards(self, page: Page):
+        """返回表单"活动推荐"区的活动卡片列表；表单未渲染时为空。"""
+        return page.locator(KUAISHOU_ACTIVITY_CARD_SELECTOR)
 
-            # 点击关闭按钮（X），使用多个可靠特征
-            close_button = page.locator('div[role="alertdialog"]').locator(
-                '[aria-label="Skip"], [data-action="skip"], button[title="Skip"]'
+    async def _read_activity_cards(self, page: Page) -> list[dict]:
+        cards = []
+        for i in range(await self._activity_cards(page).count()):
+            card = self._activity_cards(page).nth(i)
+            title_el = card.locator(KUAISHOU_ACTIVITY_TITLE_SELECTOR).first
+            title = (await title_el.inner_text()).strip() if await title_el.count() else ""
+            # 用文本判断而非可见定位：卡片在视口外时按钮元素依然存在
+            card_text = await card.inner_text()
+            oper = "unknown"
+            for text in ("已添加", "去领取", "添加"):
+                if text in card_text:
+                    oper = text
+                    break
+            cards.append({"name": title, "status": oper})
+        return cards
+
+    async def set_activity(self, page: Page) -> None:
+        """在表单"活动推荐"区选中指定活动；活动未领取时先走领取弹窗。显式传了
+        activity 却没能选中时终止发布（防止发出与预期不符的内容）。"""
+        if not self.activity:
+            return
+
+        kuaishou_logger.info(_msg("🎯", f"小人准备参加创作活动: {self.activity}"))
+        await self.close_guide_overlay(page)
+        cards = self._activity_cards(page)
+        try:
+            await cards.first.wait_for(state="visible", timeout=20000)
+        except Exception:
+            raise RuntimeError(
+                "发布页没有渲染出活动推荐区（可能视频尚未上传完成或平台改版），"
+                f"无法参加活动 '{self.activity}'。为避免发布与预期不符，已终止。"
             )
 
-            await close_button.click(force=True)
+        target = None
+        for i in range(await cards.count()):
+            card = cards.nth(i)
+            title_el = card.locator(KUAISHOU_ACTIVITY_TITLE_SELECTOR).first
+            if await title_el.count() and (await title_el.inner_text()).strip() == self.activity:
+                target = card
+                break
+        if target is None:
+            available = [c["name"] for c in await self._read_activity_cards(page)]
+            raise RuntimeError(
+                f"活动推荐区没有匹配到活动 '{self.activity}'（当前候选: {available}）。"
+                f"请用 `sau kuaishou list-activities --account <账号>` 查看可参加的活动名后重试。"
+            )
 
-            # 等待遮罩消失
-            await joyride_tooltip.wait_for(state="hidden", timeout=5000)
+        # 已领取的活动显示"添加"；未领取的显示"去领取"，需先在弹窗里"立即领取"
+        if await target.get_by_text("去领取", exact=True).count():
+            kuaishou_logger.info(_msg("🎯", f"活动 '{self.activity}' 尚未领取，小人先去领取"))
+            await target.get_by_text("去领取", exact=True).first.click()
+            claim_btn = page.get_by_text("立即领取", exact=True).first
+            await claim_btn.wait_for(state="visible", timeout=15000)
+            await claim_btn.click()
+            await page.wait_for_timeout(3000)
+            # 关闭活动详情弹窗（优先文字按钮，退回右上角 X）
+            for txt in ("知道了", "关 闭", "关闭", "确定", "完成"):
+                btn = page.get_by_text(txt, exact=True).first
+                if await btn.count() and await btn.is_visible():
+                    await btn.click()
+                    break
+            else:
+                close_x = page.locator(".ant-modal-close").first
+                if await close_x.count():
+                    await close_x.click()
+            await page.wait_for_timeout(2000)
+            await self.close_guide_overlay(page)
 
-            print("✅ 已关闭 Joyride 遮罩")
-        else:
-            print("未检测到 Joyride 遮罩，继续执行")
+        add_btn = target.get_by_text("添加", exact=True).first
+        if not await add_btn.count():
+            raise RuntimeError(
+                f"活动 '{self.activity}' 的卡片上没有'添加'按钮（可能尚未领取活动任务），已终止发布。"
+            )
+        await add_btn.click()
+        await page.wait_for_timeout(2000)
+        kuaishou_logger.success(_msg("🥳", f"已选择活动: {self.activity}"))
 
 
 class KSVideo(KSBaseUploader):
@@ -393,6 +516,7 @@ class KSVideo(KSBaseUploader):
         headless: bool = LOCAL_CHROME_HEADLESS,
         thumbnail_path=None,
         desc: str | None = None,
+        activity: str | None = None,
     ):
         super().__init__(
             publish_date=publish_date,
@@ -406,6 +530,7 @@ class KSVideo(KSBaseUploader):
         self.tags = tags or []
         self.thumbnail_path = thumbnail_path
         self.desc = desc or ""
+        self.activity = activity
 
     async def validate_upload_args(self):
         await self.validate_base_args()
@@ -414,6 +539,12 @@ class KSVideo(KSBaseUploader):
         self.file_path = str(self.validate_video_file(self.file_path))
         if self.thumbnail_path:
             self.thumbnail_path = str(self.validate_image_file(self.thumbnail_path))
+        if len(self.tags) > KUAISHOU_MAX_TAGS:
+            kuaishou_logger.warning(
+                _msg("🏷️", f"话题 {len(self.tags)} 个超过保守上限 {KUAISHOU_MAX_TAGS} 个，"
+                            f"仅使用前 {KUAISHOU_MAX_TAGS} 个: {self.tags[:KUAISHOU_MAX_TAGS]}")
+            )
+            self.tags = self.tags[:KUAISHOU_MAX_TAGS]
 
     async def handle_upload_error(self, page: Page):
         kuaishou_logger.warning(_msg("😵", "视频上传摔了一跤，小人马上重新上传"))
@@ -501,10 +632,12 @@ class KSVideo(KSBaseUploader):
             await page.keyboard.type(self.desc or self.title)
             await page.keyboard.press("Enter")
 
-            for index, tag in enumerate(self.tags[:3], start=1):
+            for index, tag in enumerate(self.tags, start=1):
                 kuaishou_logger.info(_msg("🏷️", f"小人正在添加第 {index} 个话题: #{tag}"))
                 await page.keyboard.type(f"#{tag} ")
                 await asyncio.sleep(2)
+
+            await self.set_activity(page)
 
             max_retries = 60
             retry_count = 0
@@ -581,6 +714,7 @@ class KSNote(KSBaseUploader):
         publish_strategy: str | None = None,
         debug: bool = DEBUG_MODE,
         headless: bool = LOCAL_CHROME_HEADLESS,
+        activity: str | None = None,
     ):
         super().__init__(
             publish_date=publish_date,
@@ -593,6 +727,7 @@ class KSNote(KSBaseUploader):
         self.note = note or ""
         self.title = title or (self.note[:20] if self.note else "")
         self.tags = tags or []
+        self.activity = activity
 
     async def validate_upload_args(self):
         await self.validate_base_args()
@@ -600,6 +735,13 @@ class KSNote(KSBaseUploader):
             raise ValueError("快手图文上传时，title 是必须的")
         if not self.image_paths:
             raise ValueError("快手图文上传时，图片是必须的")
+
+        if len(self.tags) > KUAISHOU_MAX_TAGS:
+            kuaishou_logger.warning(
+                _msg("🏷️", f"话题 {len(self.tags)} 个超过保守上限 {KUAISHOU_MAX_TAGS} 个，"
+                            f"仅使用前 {KUAISHOU_MAX_TAGS} 个: {self.tags[:KUAISHOU_MAX_TAGS]}")
+            )
+            self.tags = self.tags[:KUAISHOU_MAX_TAGS]
 
         if isinstance(self.image_paths, (str, Path)):
             self.image_paths = [self.image_paths]
@@ -641,10 +783,12 @@ class KSNote(KSBaseUploader):
         await page.keyboard.type(self.note)
         await page.keyboard.press("Enter")
 
-        for index, tag in enumerate(self.tags[:3], start=1):
+        for index, tag in enumerate(self.tags, start=1):
             kuaishou_logger.info(_msg("🏷️", f"小人正在添加第 {index} 个话题: #{tag}"))
             await page.keyboard.type(f"#{tag} ")
             await asyncio.sleep(2)
+
+        await self.set_activity(page)
 
         max_retries = 60
         retry_count = 0
