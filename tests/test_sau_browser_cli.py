@@ -191,9 +191,19 @@ class BrowserCliParserTests(unittest.TestCase):
 
 
 class BrowserCliDispatchTests(unittest.TestCase):
-    def test_dispatch_xiaohongshu_check_prints_valid(self):
+    def test_dispatch_xiaohongshu_blocked_by_default(self):
+        """小红书通道默认停用（封号风险），所有动作都应拦截返回 1。"""
+        for action in ("login", "check", "upload-video", "upload-note"):
+            args = Namespace(platform="xiaohongshu", action=action, account="creator")
+            code = asyncio.run(sau_cli.dispatch(args))
+            self.assertEqual(code, 1, f"action={action} 应被停用闸门拦截")
+
+    def test_dispatch_xiaohongshu_check_prints_valid_when_enabled(self):
         args = Namespace(platform="xiaohongshu", action="check", account="creator")
-        with patch("sau_cli.check_xiaohongshu_account", new=AsyncMock(return_value=True)):
+        with (
+            patch("sau_cli.XIAOHONGSHU_ENABLED", True),
+            patch("sau_cli.check_xiaohongshu_account", new=AsyncMock(return_value=True)),
+        ):
             code = asyncio.run(sau_cli.dispatch(args))
         self.assertEqual(code, 0)
 
@@ -284,7 +294,10 @@ class BrowserCliDispatchTests(unittest.TestCase):
             debug=False,
             headless=False,
         )
-        with patch("sau_cli.upload_xiaohongshu_video", new=AsyncMock()) as mock_upload:
+        with (
+            patch("sau_cli.XIAOHONGSHU_ENABLED", True),
+            patch("sau_cli.upload_xiaohongshu_video", new=AsyncMock()) as mock_upload,
+        ):
             asyncio.run(sau_cli.dispatch(args))
 
         request = mock_upload.await_args.args[0]
@@ -305,7 +318,10 @@ class BrowserCliDispatchTests(unittest.TestCase):
             debug=False,
             headless=True,
         )
-        with patch("sau_cli.upload_xiaohongshu_note", new=AsyncMock()) as mock_upload:
+        with (
+            patch("sau_cli.XIAOHONGSHU_ENABLED", True),
+            patch("sau_cli.upload_xiaohongshu_note", new=AsyncMock()) as mock_upload,
+        ):
             asyncio.run(sau_cli.dispatch(args))
 
         request = mock_upload.await_args.args[0]

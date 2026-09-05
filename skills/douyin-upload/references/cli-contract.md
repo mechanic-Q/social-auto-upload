@@ -4,7 +4,22 @@
 
 ## 命令列表
 
+### 账号巡检（只读）
+
+```bash
+sau douyin health --account <account> [--limit 30] [--headless | --headed]
+```
+
+- 预期输出:
+  - JSON：`account`（昵称/粉丝/作品数/处罚记录）、`works`（每条作品的状态 flags 与播放数据）、`summary`（异常状态清单、播放中位数）
+- 行为:
+  - 只读，不发布任何内容
+- 判断口径:
+  - `account.punish_info.has_punished` 为 true，或 `works` 出现 `self_see`/`is_prohibited`/`in_reviewing` = 平台侧限制
+  - 状态正常但 `summary.median_play` 持续极低 = 低流量池，属内容信号问题而非违规
+
 ### 登录
+
 
 ```bash
 sau douyin login --account <account>
