@@ -483,7 +483,13 @@ class ToutiaoVideo(BaseVideoUploader):
 
     async def submit_publish(self, page: Page) -> None:
         footer = page.locator(".video-batch-footer .button-group").first
-        await footer.wait_for(state="visible", timeout=30000)
+        try:
+            await footer.wait_for(state="visible", timeout=30000)
+        except Exception:
+            # 0906 深夜实证：AI 声明勾选后 footer 可能 >30s 才渲染（懒加载/服务端慢），
+            # 先截图留证再放宽等 60s；两次都没出才放弃
+            await page.screenshot(path="/tmp/toutiao_footer_debug.png", full_page=True)
+            await footer.wait_for(state="visible", timeout=60000)
 
         if self.draft:
             draft_btn = footer.get_by_text("存草稿", exact=True).first
