@@ -599,6 +599,9 @@ async def upload_bilibili_video(request: BilibiliVideoUploadRequest) -> Path:
     result = run_biliup_command(arguments)
     if result.returncode != 0:
         raise RuntimeError((result.stderr or result.stdout or "").strip() or "Bilibili upload failed")
+    from collector.events import safe_append_publish_event
+
+    safe_append_publish_event("bilibili", account_file, request.title)
     return account_file
 
 
@@ -879,10 +882,20 @@ def build_parser() -> argparse.ArgumentParser:
     youtube_upload_video_parser.add_argument(
         "--visibility", default="public", choices=["public", "unlisted", "private"], help="Video visibility")
     add_runtime_flags(youtube_upload_video_parser)
+
+    from collector.cli import register_stats_parser
+
+    register_stats_parser(platform_parsers)
     return parser
 
 
 async def dispatch(args: argparse.Namespace) -> int:
+    if args.platform == "stats":
+        from collector.cli import handle
+
+        # handle 内部会为新平台采集起自己的 event loop,挪到线程避免嵌套 asyncio.run
+        return await asyncio.to_thread(handle, args)
+
     if args.platform == "douyin":
         if args.action == "login":
             result = await login_douyin_account(args.account, headless=args.headless)
@@ -1081,10 +1094,13 @@ async def dispatch(args: argparse.Namespace) -> int:
         raise RuntimeError(f"Unsupported Toutiao action: {args.action}")
 
     if args.platform == "xiaohongshu":
-        if not XIAOHONGSHU_ENABLED:
+        # 2026-09-07: 停用开关只拦高风险的自动化发布;login 由人工扫码、check 为
+        # 只读校验,均为低风险操作,放行(数据采集依赖有效登录态)。
+        if not XIAOHONGSHU_ENABLED and args.action not in ("login", "check"):
             print(
-                "小红书通道已停用：现有浏览器自动化方式在小红书存在较高封号风险（多次实测）。\n"
-                "如需恢复：将 conf.py 的 XIAOHONGSHU_ENABLED 改为 True——但仅在确认有更安全的发布方式之后。",
+                "小红书发布通道已停用：现有浏览器自动化方式在小红书存在较高封号风险（多次实测）。\n"
+                "如需恢复：将 conf.py 的 XIAOHONGSHU_ENABLED 改为 True——但仅在确认有更安全的发布方式之后。\n"
+                "login / check（人工扫码与只读校验）不受此开关限制。",
                 file=sys.stderr,
             )
             return 1

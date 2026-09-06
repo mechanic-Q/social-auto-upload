@@ -1,4 +1,5 @@
 import asyncio
+import os
 import tempfile
 import unittest
 from argparse import Namespace
@@ -103,6 +104,7 @@ class BilibiliCliTests(unittest.TestCase):
         self.assertEqual(captured.get("thumbnail_file"), thumb)
 
     def test_upload_bilibili_video_translates_thumbnail_to_cover(self):
+        os.environ["SOCIAL_DATA_DIR"] = tempfile.mkdtemp()  # 隔离: 发布钩子不写真实事件文件
         with tempfile.TemporaryDirectory() as tmp_dir:
             thumb = Path(tmp_dir) / "thumb.png"
             thumb.write_text("fake")
@@ -133,6 +135,7 @@ class BilibiliCliTests(unittest.TestCase):
             self.assertEqual(args_list[cover_idx + 1], str(thumb))
 
     def test_upload_bilibili_video_without_thumbnail_omits_cover(self):
+        os.environ["SOCIAL_DATA_DIR"] = tempfile.mkdtemp()  # 隔离: 发布钩子不写真实事件文件
         with tempfile.TemporaryDirectory() as tmp_dir:
             video = Path(tmp_dir) / "demo.mp4"
             video.write_text("fake")

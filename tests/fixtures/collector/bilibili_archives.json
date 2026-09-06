@@ -1,0 +1,36 @@
+{
+  "code": 0,
+  "message": "0",
+  "ttl": 1,
+  "data": {
+    "page": {"count": 2, "num": 1, "size": 50},
+    "class": {"pubed": 2, "not_pubed": 0, "is_pubing": 0},
+    "arc_audits": [
+      {
+        "Archive": {
+          "bvid": "BV1xx411c7mD",
+          "title": "每日新中国 0906 期",
+          "state": 0,
+          "state_desc": "开放浏览",
+          "ctime": 1757120000,
+          "ptime": 1757123400
+        },
+        "stat": {
+          "view": 1234, "like": 56, "coin": 7, "favorite": 89,
+          "share": 10, "reply": 11, "danmaku": 3
+        }
+      },
+      {
+        "Archive": {
+          "bvid": "BV1xx411c8mD",
+          "title": "每日新中国 0905 期",
+          "state": -30,
+          "state_desc": "待审",
+          "ctime": 1757030000,
+          "ptime": 0
+        },
+        "stat": {"view": 0, "like": 0, "coin": 0, "favorite": 0, "share": 0, "reply": 0, "danmaku": 0}
+      }
+    ]
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "result": 1,
+  "data": {
+    "list": [
+      {"workId": "3xtvnqrp6er9dhu", "title": "机器人来抢活儿还是造饭碗？具身智能产业开出新岗位", "playCount": 1200, "likeCount": 35, "commentCount": 12, "photoStatus": 3},
+      {"workId": "3xtvnqrp7abc8de", "title": "每日新中国 0906 期", "playCount": 980, "likeCount": 28, "commentCount": 9}
+    ],
+    "total": 2,
+    "nextCursor": "no_more"
+  }
+}

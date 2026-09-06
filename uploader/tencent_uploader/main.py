@@ -241,8 +241,27 @@ async def _save_tencent_qrcode(page: Page, account_file: str, previous_qrcode_pa
     else:
         # open.weixin.qq.com sometimes exposes a relative /connect/qrcode/... img;
         # screenshot the visible QR element instead of fetching a cookie-bound URL.
+        # 2026-08-13: xvfb 下 screenshot 卡 30s 失败。改为 iframe 内 fetch 转 data URL，
+        # 保证登录进程自己的二维码能落盘（用户扫的必须与登录请求同一个 session）。
         qrcode_path.parent.mkdir(parents=True, exist_ok=True)
-        await qrcode_img.screenshot(path=str(qrcode_path))
+        try:
+            data_url = await qrcode_img.evaluate("""async (img) => {
+                const url = img.currentSrc || img.src;
+                const r = await fetch(url, {credentials:'include'});
+                if (!r.ok) return '';
+                const b = await r.blob();
+                return new Promise(res => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = () => res(''); fr.readAsDataURL(b); });
+            }""")
+            if data_url.startswith("data:image/"):
+                qrcode_path = qrcode_utils["save_data_url_image"](data_url, qrcode_path)
+                tencent_logger.info(_msg("🖼️", f"二维码已保存（fetch data URL）: {qrcode_path}"))
+            else:
+                raise ValueError("fetch 未拿到图片数据")
+        except Exception as exc:
+            tencent_logger.warning(_msg("😵", f"二维码保存失败（{exc}），跳过本次刷新继续等待扫码"))
+            qrcode_info = {"image_path": str(previous_qrcode_path) if previous_qrcode_path else "", "image_data_url": qrcode_src if qrcode_src.startswith("data:image/") else None, "image_src": qrcode_src}
+            await _emit_qrcode_callback(qrcode_callback, qrcode_info)
+            return qrcode_info
     if previous_qrcode_path and previous_qrcode_path != qrcode_path:
         if qrcode_utils["remove_qrcode_file"](previous_qrcode_path):
             tencent_logger.info(_msg("🧹", f"临时二维码文件已清理: {previous_qrcode_path}"))
@@ -842,16 +861,23 @@ class TencentBaseUploader(BaseVideoUploader):
         if not await button.count():
             raise RuntimeError(f"未找到视频号{label}按钮")
 
-        await page.evaluate("(el) => el.click()", await button.element_handle())
+        await button.first.click()
         try:
             await page.wait_for_url("**/post/list**" if is_draft else TENCENT_MANAGE_URL, timeout=15000)
         except Exception as exc:
             if "post/list" in page.url or (not is_draft and TENCENT_MANAGE_URL in page.url):
                 pass
             else:
+                try:
+                    await page.screenshot(path=str(Path(BASE_DIR) / "debug_publish_after_click.png"), full_page=True)
+                except Exception:
+                    pass
                 raise RuntimeError(f"视频号{label}已提交但页面未确认，禁止重复点击；请到后台核验") from exc
 
         tencent_logger.success(_msg("🥳", "视频草稿保存成功" if is_draft else "视频发布成功"))
+        if not is_draft:
+            from collector.events import safe_append_publish_event
+            safe_append_publish_event("tencent", self.account_file, getattr(self, "title", ""))
 
 
 class TencentVideo(TencentBaseUploader):

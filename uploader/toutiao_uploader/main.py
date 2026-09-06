@@ -508,6 +508,8 @@ class ToutiaoVideo(BaseVideoUploader):
         try:
             await page.wait_for_url(TOUTIAO_MANAGE_URL_PATTERN, timeout=30000)
             toutiao_logger.success(_msg("🥳", "视频发布成功，小人开心收工"))
+            from collector.events import safe_append_publish_event
+            safe_append_publish_event("toutiao", self.account_file, self.title)
             return
         except Exception:
             pass
@@ -519,6 +521,8 @@ class ToutiaoVideo(BaseVideoUploader):
                 await confirm.click()
                 await page.wait_for_url(TOUTIAO_MANAGE_URL_PATTERN, timeout=30000)
                 toutiao_logger.success(_msg("🥳", "视频发布成功，小人开心收工"))
+                from collector.events import safe_append_publish_event
+                safe_append_publish_event("toutiao", self.account_file, self.title)
                 return
         except Exception:
             pass

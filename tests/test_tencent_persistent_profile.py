@@ -66,6 +66,10 @@ class FakeVisibleLocator:
     async def get_attribute(self, name):
         return self._src if name == "src" else None
 
+    async def evaluate(self, _script, arg=None):
+        # 2026-09 实现: iframe 内 fetch 二维码转 data URL(替代会卡死的 screenshot)
+        return "data:image/png;base64,QUFB"
+
     async def screenshot(self, path):
         self.screenshot_path = Path(path)
         self.screenshot_path.write_bytes(b"png")
@@ -150,14 +154,18 @@ class TencentPersistentProfileTests(unittest.TestCase):
             qr_path = Path(tmp_dir) / "cookies" / "qr.png"
             locator = FakeVisibleLocator("/connect/qrcode/demo")
 
+            saved = {}
+
+            def fake_save_data_url_image(data_url, path):
+                saved["data_url"] = data_url
+                return path
+
             fake_utils = {
                 "build_login_qrcode_path": lambda account, suffix: qr_path,
                 "decode_qrcode_from_path": lambda path: None,
                 "print_terminal_qrcode": lambda *args, **kwargs: None,
                 "remove_qrcode_file": lambda path: False,
-                "save_data_url_image": lambda *args, **kwargs: (_ for _ in ()).throw(
-                    AssertionError("data saver should not run")
-                ),
+                "save_data_url_image": fake_save_data_url_image,
             }
             with patch("uploader.tencent_uploader.main._get_qrcode_utils", return_value=fake_utils):
                 info = asyncio.run(
@@ -167,9 +175,11 @@ class TencentPersistentProfileTests(unittest.TestCase):
                     )
                 )
 
+        # 2026-09 实现: 相对 src 走 iframe 内 fetch → data URL → save_data_url_image 落盘
+        self.assertEqual(saved["data_url"], "data:image/png;base64,QUFB")
         self.assertEqual(info["image_path"], str(qr_path))
         self.assertEqual(info["image_src"], "/connect/qrcode/demo")
-        self.assertEqual(locator.screenshot_path, qr_path)
+        self.assertIsNone(locator.screenshot_path)
 
     def test_expired_qrcode_is_detected_inside_login_iframe(self):
         expired_tip = FakeVisibleLocator()

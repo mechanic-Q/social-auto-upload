@@ -608,6 +608,8 @@ class XiaoHongShuVideo(XiaoHongShuBaseUploader):
                     timeout=3000
                 )
                 xiaohongshu_logger.success(_msg("🥳", "视频发布成功，小人开心收工"))
+                from collector.events import safe_append_publish_event
+                safe_append_publish_event("xiaohongshu", self.account_file, self.title)
                 break
             except Exception:
                 xiaohongshu_logger.info(_msg("🏃", "小人正在冲刺发布视频"))
@@ -731,6 +733,8 @@ class XiaoHongShuNote(XiaoHongShuBaseUploader):
                     timeout=3000
                 )
                 xiaohongshu_logger.success(_msg("🥳", "图文发布成功，小人开心收工"))
+                from collector.events import safe_append_publish_event
+                safe_append_publish_event("xiaohongshu", self.account_file, self.title)
                 break
             except Exception:
                 xiaohongshu_logger.info(_msg("🏃", "小人正在冲刺发布图文"))
