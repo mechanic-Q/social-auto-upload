@@ -21,6 +21,9 @@ from collector.xiaohongshu import collect_xiaohongshu
 COOKIES_DIR = Path(__file__).parent.parent / "cookies"
 # 浏览器型平台在同一个 asyncio loop 内顺序执行,绝不并发打开多个创作后台
 BROWSER_PLATFORMS = ("douyin", "xiaohongshu", "kuaishou", "tencent", "toutiao")
+# 默认调度清单: 2026-09-07 用户决定搁置小红书(cookie 失效未续,发布通道亦停用),
+# 不再进入每日全量;需要时手动 `sau stats collect --full --only xiaohongshu` 或 probe。
+DEFAULT_PLATFORMS = ("bilibili", "douyin", "kuaishou", "tencent", "toutiao")
 
 
 def account_files(platform: str) -> list[Path]:
@@ -53,7 +56,7 @@ def _collect_platform(store: CollectorStore, platform: str, trigger: str, probe:
     return asyncio.run(_run())
 
 
-def run_full(platforms=PLATFORMS, generate_report: bool = True) -> dict:
+def run_full(platforms=DEFAULT_PLATFORMS, generate_report: bool = True) -> dict:
     """全量采集：每平台（每账号）一次快照。任务计划每日 09:30 触发，错过由
     StartWhenAvailable 在开机后补跑——不需要额外的去重判断。"""
     ensure_layout()
