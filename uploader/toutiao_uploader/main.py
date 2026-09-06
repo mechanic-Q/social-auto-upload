@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
+import inspect, re
 import os
 from datetime import datetime
 from pathlib import Path
@@ -362,10 +362,51 @@ class ToutiaoVideo(BaseVideoUploader):
         await file_input.set_input_files(self.thumbnail_path)
         await asyncio.sleep(2)
 
-        confirm = modal.locator('button:has-text("完成"), button:has-text("确定"), button:has-text("确认")').last
-        await confirm.wait_for(state="visible", timeout=15000)
-        await confirm.click()
-        await modal.wait_for(state="hidden", timeout=30000)
+        # 2026-09-06 四修（DOM dump 定案）：按钮 = .btn-sure「确定」，容器 = .m-xigua-dialog.m-modal；
+        # 旧 .m-dialog-edit/[role=dialog] 选择器完全失配；图片处理完 DOM 尾部会多挂一个
+        # 不可见的空 .m-shark-modal，容器用 .last 会选错——按「modal 内可见按钮」过滤；
+        # visible ≠ enabled：处理中确定按钮就是 disabled 红钮，:not([disabled]) + 未关闭重试（≤3 次）
+        btn = page.locator('div[class*="modal"] button:visible:not([disabled])',
+                           has_text=re.compile(r"确定|完成|确认")).last
+        clicked = False
+        for attempt in range(3):
+            box = None
+            try:
+                await btn.wait_for(state="visible", timeout=90000 if attempt == 0 else 30000)
+                b = await btn.bounding_box()
+                if b:
+                    box = {"x": b["x"] + b["width"] / 2, "y": b["y"] + b["height"] / 2}
+            except Exception:
+                box = None
+            if not box:  # 兜底：querySelectorAll 全局搜（不依赖容器类名，只收 enabled）
+                for _ in range(10):
+                    box = await page.evaluate(
+                        """() => {
+                        const btns = [...document.querySelectorAll('div[class*="modal"] button, .m-xigua-dialog button')]
+                          .filter(b => /确定|完成|确认/.test(b.innerText.trim()) && !b.disabled
+                                       && (b.offsetParent || b.getClientRects().length));
+                        if (!btns.length) return null;
+                        const r = btns[btns.length - 1].getBoundingClientRect();
+                        return {x: r.x + r.width / 2, y: r.y + r.height / 2};
+                    }""")
+                    if box:
+                        break
+                    await asyncio.sleep(3)
+            if not box:
+                break
+            await page.mouse.click(box["x"], box["y"])
+            clicked = True
+            toutiao_logger.info(_msg("🖱️", f"鼠标物理点击确认键 @({box['x']:.0f},{box['y']:.0f}) 第{attempt + 1}次"))
+            try:
+                await modal.wait_for(state="hidden", timeout=10000)
+                break  # 弹窗已关 = 封面确认成功
+            except Exception:
+                toutiao_logger.warning(_msg("😵", f"第{attempt + 1}次点击后弹窗未关（按钮可能仍 disabled），重试"))
+        else:
+            await page.screenshot(path="/tmp/toutiao_after_click.png", full_page=True)
+            if clicked:
+                raise RuntimeError("封面弹窗点击 3 次仍未关闭（确定按钮始终无效）")
+            raise RuntimeError("封面弹窗确定按钮不可点（locator+querySelectorAll 双失败）")
         toutiao_logger.success(_msg("🥳", "封面已经设置完成"))
 
     async def set_activity(self, page: Page) -> None:
@@ -442,7 +483,13 @@ class ToutiaoVideo(BaseVideoUploader):
 
     async def submit_publish(self, page: Page) -> None:
         footer = page.locator(".video-batch-footer .button-group").first
-        await footer.wait_for(state="visible", timeout=30000)
+        try:
+            await footer.wait_for(state="visible", timeout=30000)
+        except Exception:
+            # 0906 深夜实证：AI 声明勾选后 footer 可能 >30s 才渲染（懒加载/服务端慢），
+            # 先截图留证再放宽等 60s；两次都没出才放弃
+            await page.screenshot(path="/tmp/toutiao_footer_debug.png", full_page=True)
+            await footer.wait_for(state="visible", timeout=60000)
 
         if self.draft:
             draft_btn = footer.get_by_text("存草稿", exact=True).first

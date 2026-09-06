@@ -554,6 +554,9 @@ class KSVideo(KSBaseUploader):
         if not self.thumbnail_path:
             return
 
+        # joyride 新手引导会在上传过程中重新挂载（0906 实证：填话题时清过一次，
+        # 到设封面时又弹回来拦截点击）——每个关键点击前都要再清一次
+        await self.close_guide_overlay(page)
         kuaishou_logger.info(_msg("🖼️", "小人准备设置封面"))
 
         cover_label = page.locator("span").filter(has_text="封面设置")
@@ -670,6 +673,7 @@ class KSVideo(KSBaseUploader):
 
             while True:
                 try:
+                    await self.close_guide_overlay(page)  # 发布点击前再清（引导遮罩会反复重挂）
                     publish_button = page.get_by_text("发布", exact=True)
                     if await publish_button.count() > 0:
                         await publish_button.click()
