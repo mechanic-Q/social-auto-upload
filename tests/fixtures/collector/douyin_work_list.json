@@ -1,0 +1,26 @@
+{
+  "status_code": 0,
+  "aweme_list": [
+    {
+      "aweme_id": "7682139971381251355",
+      "desc": "每日新中国 0906 期｜9月6日新闻速览",
+      "create_time": 1757123400,
+      "status": {"reviewed": true, "private_status": 0},
+      "statistics": {
+        "play_count": 22000, "digg_count": 340, "comment_count": 45,
+        "share_count": 22, "collect_count": 66
+      }
+    },
+    {
+      "aweme_id": "7681000000000000001",
+      "desc": "每日新中国 0905 期｜9月5日新闻速览",
+      "create_time": 1757037000,
+      "status": {"reviewed": true, "private_status": 0},
+      "statistics": {
+        "play_count": 15000, "digg_count": 210, "comment_count": 30,
+        "share_count": 15, "collect_count": 40
+      }
+    }
+  ],
+  "has_more": false
+}

@@ -67,10 +67,10 @@ class KuaishouActivityTagTests(unittest.TestCase):
 
 
 class ToutiaoVideoTests(unittest.TestCase):
-    def test_title_over_300_chars_rejected(self):
+    def test_title_over_limit_rejected(self):
         video = ToutiaoVideo("字" * (TOUTIAO_TITLE_MAX_LEN + 1), "/tmp/demo.mp4", [], 0, "/tmp/cookie.json")
         video.validate_base_args = AsyncMock()
-        with self.assertRaisesRegex(ValueError, "300"):
+        with self.assertRaisesRegex(ValueError, str(TOUTIAO_TITLE_MAX_LEN)):
             asyncio.run(video.validate_upload_args())
 
     def test_tags_over_limit_truncated(self):

@@ -1,0 +1,9 @@
+{
+  "message": "success",
+  "data": {
+    "list": [
+      {"article_id": "745600001", "title": "每日新中国 0906 期", "go_detail_count": 7800, "comment_count": 30, "share_count": 11},
+      {"article_id": "745600002", "title": "每日新中国 0905 期", "go_detail_count": 6400, "comment_count": 24, "share_count": 8}
+    ]
+  }
+}

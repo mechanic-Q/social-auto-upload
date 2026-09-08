@@ -72,16 +72,30 @@ class FakeThumbnailPage:
 
 
 class FakePublishButton(FakeLocator):
+    """匹配 2026-09 实现: 发布走 Locator.first.click(), 不再经 element_handle/evaluate。"""
+
+    def __init__(self, page=None):
+        super().__init__(count=1)
+        self._page = page
+
+    @property
+    def first(self):
+        return self
+
     async def element_handle(self):
         return self
+
+    async def click(self, **_kwargs):
+        if self._page is not None:
+            self._page.publish_clicks += 1
 
 
 class FakePublishPage:
     def __init__(self):
         self.url = "https://channels.weixin.qq.com/platform/post/create"
-        self.publish_button = FakePublishButton()
         self.publish_clicks = 0
         self.navigation_attempts = 0
+        self.publish_button = FakePublishButton(self)
 
     def locator(self, selector):
         if "发表" in selector:

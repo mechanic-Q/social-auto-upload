@@ -685,6 +685,8 @@ class KSVideo(KSBaseUploader):
 
                     await page.wait_for_url(KUAISHOU_MANAGE_URL_PATTERN, timeout=5000)
                     kuaishou_logger.success(_msg("🥳", "视频发布成功，小人开心收工"))
+                    from collector.events import safe_append_publish_event
+                    safe_append_publish_event("kuaishou", self.account_file, self.title)
                     break
                 except Exception as exc:
                     kuaishou_logger.info(_msg("🏃", f"小人正在冲刺发布视频: {exc}"))
@@ -835,6 +837,8 @@ class KSNote(KSBaseUploader):
 
                 await page.wait_for_url(KUAISHOU_MANAGE_URL_PATTERN, timeout=5000)
                 kuaishou_logger.success(_msg("🥳", "图文发布成功，小人开心收工"))
+                from collector.events import safe_append_publish_event
+                safe_append_publish_event("kuaishou", self.account_file, self.title)
                 break
             except Exception as exc:
                 kuaishou_logger.info(_msg("🏃", f"小人正在冲刺发布图文: {exc}"))

@@ -305,18 +305,52 @@ class DouYinBaseUploader(BaseVideoUploader):
         await page.keyboard.press("Enter")
         await asyncio.sleep(1)
 
-    async def fill_title_and_description(self, page: Page, title: str, description: str, tags: list[str] | None = None):
+    async def fill_title_and_description(self, page: Page, title: str, description: str, tags: list[str] | None = None, fill_desc: bool = False):
         # 2026-06 抖音发布页 DOM：标题=input[placeholder*=填写作品标题]，描述=div.zone-container[contenteditable]
         # version_2(post/video) 发布页要等视频上传完才渲染表单（实测约 40s），故等待超时给到 120s
-        title_input = page.locator('input[placeholder*="填写作品标题"]').first
-        await title_input.wait_for(state="visible", timeout=120000)
+        # 2026-08-30 图文发布页标题框：多选择器兜底（input placeholder / textarea / div[contenteditable]）
+        title_selectors = [
+            'input[placeholder*="填写作品标题"]',
+            'textarea[placeholder*="填写作品标题"]',
+            'input[placeholder*="输入标题"]',
+            'div[contenteditable="true"][data-placeholder*="标题"]',
+            'input[placeholder]',
+        ]
+        title_input = None
+        for sel in title_selectors:
+            try:
+                loc = page.locator(sel).first
+                await loc.wait_for(state="visible", timeout=8000)
+                title_input = loc
+                break
+            except Exception:
+                continue
+        if title_input is None:
+            douyin_logger.error(_msg("😵", "未找到标题输入框，截图诊断"))
+            try:
+                await page.screenshot(path="/tmp/dy_note_title_diag.png", full_page=True)
+            except Exception:
+                pass
+            # 最后兜底：页面上任一可见 input
+            try:
+                title_input = page.locator('input:visible').first
+                await title_input.wait_for(state="visible", timeout=5000)
+            except Exception:
+                raise
         await title_input.fill(title[:30])
 
         description_editor = page.locator('div.zone-container[contenteditable="true"]').first
-        await description_editor.wait_for(state="visible", timeout=120000)
+        try:
+            await description_editor.wait_for(state="visible", timeout=120000)
+        except Exception:
+            douyin_logger.error(_msg("😵", "未找到描述框，尝试备用选择器"))
+            description_editor = page.locator('[contenteditable="true"]').first
+            await description_editor.wait_for(state="visible", timeout=10000)
         await description_editor.click()
         await page.keyboard.press("Control+KeyA")
         await page.keyboard.press("Delete")
+        if description and fill_desc:
+            await page.keyboard.type(description)
 
         for tag in tags or []:
             await page.keyboard.type(" #" + tag)
@@ -724,6 +758,8 @@ class DouYinVideo(DouYinBaseUploader):
                     timeout=3000,
                 )
                 douyin_logger.success(_msg("🥳", "视频发布成功，小人开心收工"))
+                from collector.events import safe_append_publish_event
+                safe_append_publish_event("douyin", self.account_file, self.title)
                 break
             except Exception:
                 await self.handle_auto_video_cover(page)
@@ -822,7 +858,7 @@ class DouYinNote(DouYinBaseUploader):
 
         await asyncio.sleep(1)
         douyin_logger.info(_msg("✍️", "小人开始填标题、描述和话题"))
-        await self.fill_title_and_description(page, self.title, self.note, self.tags)
+        await self.fill_title_and_description(page, self.title, self.note, self.tags, fill_desc=True)
         title_len = len(self.title) if self.title else 0
         tags_text = " ".join(f"#{t}" for t in self.tags) if self.tags else ""
         desc_and_tags_len = len(self.note or "") + (len(tags_text) + 2 if self.tags else 0)
@@ -845,6 +881,8 @@ class DouYinNote(DouYinBaseUploader):
                     timeout=3000,
                 )
                 douyin_logger.success(_msg("🥳", "图文发布成功，小人开心收工"))
+                from collector.events import safe_append_publish_event
+                safe_append_publish_event("douyin", self.account_file, self.title)
                 break
             except Exception:
                 douyin_logger.info(_msg("🏃", "小人正在冲刺发布图文"))
