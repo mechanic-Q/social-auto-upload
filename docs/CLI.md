@@ -105,6 +105,7 @@ SAU_XHS_CREATOR_BASE_URL=https://creator.rednote.com sau xiaohongshu login --acc
 sau bilibili login --account <account_name>
 sau bilibili check --account <account_name>
 sau bilibili upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --tid 249 --tags 足球,测试
+# 内容标签 + 固定活动标签拼满 10 个上限：--extra-tag-pool activity（组清单在 conf.PLATFORM_EXTRA_TAG_POOLS）
 ```
 
 补充说明：

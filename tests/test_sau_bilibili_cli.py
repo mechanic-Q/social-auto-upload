@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import ANY, AsyncMock, Mock, patch
 
 import sau_cli
+from utils.extra_tags import merge_tags
 
 
 class BilibiliCliTests(unittest.TestCase):
@@ -96,12 +97,43 @@ class BilibiliCliTests(unittest.TestCase):
                 desc="hello",
                 tid=232,
                 tags="tag1,tag2",
+                extra_tag_pool=[],
                 schedule=0,
                 thumbnail=thumb,
             )
             with patch("sau_cli.upload_bilibili_video", new=fake_upload):
                 asyncio.run(sau_cli.dispatch(args))
         self.assertEqual(captured.get("thumbnail_file"), thumb)
+
+    def test_dispatch_bilibili_upload_merges_extra_tag_pool(self):
+        # 2026-09-09：B站接入 extra-tag-pool（活动标签组 activity 拼内容标签打满 10 上限）
+        captured = {}
+
+        async def fake_upload(request):
+            captured["tags"] = request.tags
+
+        os.environ["SOCIAL_DATA_DIR"] = tempfile.mkdtemp()  # 隔离: 发布钩子不写真实事件文件
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            video = Path(tmp_dir) / "demo.mp4"
+            video.write_text("fake")
+            args = Namespace(
+                platform="bilibili",
+                action="upload-video",
+                account="creator",
+                file=video,
+                title="hello",
+                desc="hello",
+                tid=232,
+                tags="每日新中国,人工智能,中国制造,今日要闻,科技",
+                extra_tag_pool=["activity"],
+                schedule=0,
+                thumbnail=None,
+            )
+            with patch("sau_cli.upload_bilibili_video", new=fake_upload):
+                asyncio.run(sau_cli.dispatch(args))
+        pool_tags = sau_cli.resolve_extra_tags("bilibili", ["activity"])
+        self.assertEqual(captured["tags"], merge_tags(["每日新中国", "人工智能", "中国制造", "今日要闻", "科技"], pool_tags))
+        self.assertEqual(len(captured["tags"]), 9)  # 5 内容 + 4 活动去重后
 
     def test_upload_bilibili_video_translates_thumbnail_to_cover(self):
         os.environ["SOCIAL_DATA_DIR"] = tempfile.mkdtemp()  # 隔离: 发布钩子不写真实事件文件
