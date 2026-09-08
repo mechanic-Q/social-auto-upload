@@ -53,7 +53,7 @@ sau toutiao upload-video \
 - 必填参数:
   - `--account`
   - `--file`
-  - `--title`（不超过 300 字，超限直接报错）
+  - `--title`（不超过 30 字，超限直接报错）
 - 可选参数:
   - `--desc`
   - `--tags`（最多取前 5 个，超限截断并告警）

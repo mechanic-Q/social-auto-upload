@@ -39,6 +39,10 @@ class ToutiaoCliParserTests(unittest.TestCase):
         self.assertEqual(args.action, "check")
 
     def test_upload_video_accepts_new_flags(self):
+        # argparse 的 existing_file_path 要求文件真实存在，测试需自备
+        fake_video = "/tmp/fake.mp4"
+        Path(fake_video).write_bytes(b"")
+        self.addCleanup(Path(fake_video).unlink, missing_ok=True)
         parser = sau_cli.build_parser()
         args = parser.parse_args(
             [

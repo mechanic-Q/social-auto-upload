@@ -66,10 +66,26 @@ sau toutiao login --account <account>
 
 ## 标题超 30 字报错
 
-头条视频标题上限 30 字，CLI 会直接报错而不是自动截断：
+头条视频标题上限 30 字（2026-09-08 页面实测），CLI 会直接报错而不是自动截断：
 
 - 让用户给一个更短的标题
 - 或者把长标题放进 `--desc`
+
+## 标题回读校验失败（发布被终止）
+
+uploader 填完标题会回读页面值做校验，不一致会重试 3 次，仍失败则终止发布并截图 `/tmp/toutiao_title_fail.png`。这通常意味着平台又改版了：
+
+- 看截图确认标题框的真实结构
+- 更新 `uploader/toutiao_uploader/main.py` 常量区的 `TOUTIAO_TITLE_CONTAINER` / `TOUTIAO_TITLE_PLACEHOLDER`
+
+## 点击发布后失败
+
+点"发布"后的失败现在会写入 `logs/toutiao.log`（ERROR 级）并截图 `/tmp/toutiao_submit_fail.png`，不再只出现在终端 stderr。排查顺序：
+
+1. `tail -50 logs/toutiao.log` 看最后几行（成功必有"视频发布成功"）
+2. 看截图 `/tmp/toutiao_submit_fail.png` 确认页面当时状态（弹窗？报错气泡？）
+3. 若弹窗文案含"标题"，说明平台拦了空/超限标题——先解决标题问题
+4. 到头条后台内容管理页人工核验是否实际已发出，**确认没发才能重试，禁止盲目重复点击发布**
 
 ## 声明原创失败导致发布终止
 

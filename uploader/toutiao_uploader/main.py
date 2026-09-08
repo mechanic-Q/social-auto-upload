@@ -35,13 +35,32 @@ TOUTIAO_MANAGE_URL = "https://mp.toutiao.com/profile_v4/graphic/publish/manage"
 TOUTIAO_LOGIN_URL = "https://mp.toutiao.com/auth/page/login?redirect_url=%2Fprofile_v4%2Fvideo%2Fupload"
 TOUTIAO_UPLOAD_URL_PATTERN = "**/profile_v4/xigua/upload-video**"
 TOUTIAO_MANAGE_URL_PATTERN = "**/profile_v4/graphic/publish/manage**"
+# 发布成功后的跳转目的地不再只有旧管理页：2026-09-08 实测两个入口都可达，
+# 视频发布后实际落点不确定，成功判定按多 pattern 兼容，避免"发了但判失败"
+TOUTIAO_MANAGE_URL_PATTERNS = (
+    TOUTIAO_MANAGE_URL_PATTERN,
+    "**/profile_v4/manage/content/**",
+    "**/profile_v4/xigua/manage**",
+)
 # 登录态失效时后台会跳到登录页
 TOUTIAO_LOGIN_URL_KEYWORD = "auth/page/login"
 TOUTIAO_PUBLISH_STRATEGY_IMMEDIATE = "immediate"
 TOUTIAO_PUBLISH_STRATEGY_SCHEDULED = "scheduled"
-# 实测（2026-09-06）：标题上限 300 字，话题最多 10 个
+# 2026-09-08 无头探测实锤：发布页标题框 placeholder 是「请输入 1～30 个字符」，
+# 旧实测「标题和简介 / 300 字上限」均已失效；页面明示上限 30 字符。
+# 标题框最稳定位是容器 div.article-title-wrap（placeholder 平台随时可改，结构最后改）。
 TOUTIAO_MAX_TAGS = 10
-TOUTIAO_TITLE_MAX_LEN = 300
+TOUTIAO_TITLE_MAX_LEN = 30
+TOUTIAO_TITLE_CONTAINER = "div.article-title-wrap"
+TOUTIAO_TITLE_PLACEHOLDER = "请输入 1～30 个字符"
+TOUTIAO_DESC_SELECTOR = "textarea[placeholder*='视频简介'], textarea.byte-textarea.abstract"
+# 话题框是 arco InputTag 组件；绝不允许用 get_by_placeholder("请输入") 这类
+# 子串泛匹配兜底——它会命中标题框（「请输入 1～30 个字符」包含「请输入」），
+# 0907-0908 的空标题发布正是这样造成的：话题循环 fill 把标题框清空了
+TOUTIAO_TOPIC_INPUT_SELECTOR = "input.arco-input-tag-input"
+TOUTIAO_SUGGESTION_SELECTOR = (
+    ".arco-select-option, [class*='trigger'] li, [class*='dropdown'] li, [class*='option']"
+)
 # 实测：西瓜上传通道的视频发布页没有活动入口（活动是文章/微头条功能），
 # 传 --activity 会明确报错终止而不是静默跳过。
 TOUTIAO_ACTIVITY_UNSUPPORTED = True
@@ -148,7 +167,13 @@ async def cookie_auth(account_file, headless: bool = True) -> bool:
             context = await browser.new_context(storage_state=str(account_file))
             context = await set_init_script(context)
             page = await context.new_page()
-            await page.goto(TOUTIAO_UPLOAD_URL)
+            try:
+                await page.goto(TOUTIAO_UPLOAD_URL)
+            except Exception as exc:
+                # 0908 15:13 事故：网络慢导致的 goto 超时不等于 cookie 失效，
+                # 放宽等待 domcontentloaded 重试一次，仍失败才按失效处理
+                toutiao_logger.warning(_msg("😵", f"cookie 校验首次打开页面失败，重试一次: {exc}"))
+                await page.goto(TOUTIAO_UPLOAD_URL, wait_until="domcontentloaded", timeout=60000)
             await asyncio.sleep(3)
             if _looks_logged_out(page.url):
                 toutiao_logger.info(_msg("🥹", "cookie 已失效，得重新登录一下"))
@@ -482,18 +507,39 @@ class ToutiaoVideo(BaseVideoUploader):
         toutiao_logger.info(f"✅ 定时发布时间已设置为 {publish_date_str}")
 
     async def submit_publish(self, page: Page) -> None:
+        def _on_manage() -> bool:
+            # 子串匹配代替单 pattern wait_for_url：发布后落点可能是旧管理页或
+            # manage/content 新页（0908 实测两者都可达），任一命中即成功
+            return any(p.replace("**", "") in page.url for p in TOUTIAO_MANAGE_URL_PATTERNS)
+
+        async def _wait_manage(timeout_s: float) -> bool:
+            deadline = asyncio.get_event_loop().time() + timeout_s
+            while True:
+                if _on_manage():
+                    return True
+                if asyncio.get_event_loop().time() >= deadline:
+                    return False
+                await asyncio.sleep(0.5)
+
+        async def _record_success():
+            toutiao_logger.success(_msg("🥳", "视频发布成功，小人开心收工"))
+            from collector.events import safe_append_publish_event
+            safe_append_publish_event("toutiao", self.account_file, self.title)
+
         footer = page.locator(".video-batch-footer .button-group").first
         try:
             await footer.wait_for(state="visible", timeout=30000)
         except Exception:
             # 0906 深夜实证：AI 声明勾选后 footer 可能 >30s 才渲染（懒加载/服务端慢），
             # 先截图留证再放宽等 60s；两次都没出才放弃
+            toutiao_logger.warning(_msg("😵", "发布栏 30s 未渲染，截图留证后放宽等待 60s"))
             await page.screenshot(path="/tmp/toutiao_footer_debug.png", full_page=True)
             await footer.wait_for(state="visible", timeout=60000)
 
         if self.draft:
             draft_btn = footer.get_by_text("存草稿", exact=True).first
             await draft_btn.click()
+            toutiao_logger.info(_msg("🧭", "已点击存草稿，等待保存信号"))
             await page.wait_for_timeout(4000)
             # 成功信号：跳转到管理页或出现成功提示；失败则截图报错
             if "manage" in page.url or await page.locator("text=/保存成功|提交成功/").count():
@@ -501,80 +547,140 @@ class ToutiaoVideo(BaseVideoUploader):
                 return
             if self.debug:
                 await page.screenshot(full_page=True)
+            await page.screenshot(path="/tmp/toutiao_submit_fail.png", full_page=True)
+            toutiao_logger.error(_msg("😵", f"点击存草稿后未检测到成功信号（当前 URL: {page.url}）"))
             raise RuntimeError("点击存草稿后未检测到成功信号，请到后台核验，禁止重复点击")
 
+        toutiao_logger.info(_msg("🧭", "点击发布，等待跳转内容管理页"))
         publish_btn = footer.get_by_text("发布", exact=True).first
         await publish_btn.click()
-        try:
-            await page.wait_for_url(TOUTIAO_MANAGE_URL_PATTERN, timeout=30000)
-            toutiao_logger.success(_msg("🥳", "视频发布成功，小人开心收工"))
-            from collector.events import safe_append_publish_event
-            safe_append_publish_event("toutiao", self.account_file, self.title)
+
+        if await _wait_manage(30):
+            await _record_success()
             return
-        except Exception:
-            pass
 
-        # 可能出现二次确认弹窗（声明提醒/发布确认）
-        confirm = page.locator('button:has-text("确认"), button:has-text("确定")').last
-        try:
-            if await confirm.count() and await confirm.is_visible():
-                await confirm.click()
-                await page.wait_for_url(TOUTIAO_MANAGE_URL_PATTERN, timeout=30000)
-                toutiao_logger.success(_msg("🥳", "视频发布成功，小人开心收工"))
-                from collector.events import safe_append_publish_event
-                safe_append_publish_event("toutiao", self.account_file, self.title)
-                return
-        except Exception:
-            pass
+        # 可能出现二次确认弹窗（声明提醒/发布确认）。必须先读弹窗文案再决定：
+        # 标题相关警告（如空标题确认发布）绝不能替用户点确认——0907/0908 的
+        # 无标题视频正是盲点 .last 确认按钮发出去的
+        await page.wait_for_timeout(1500)
+        dialog = page.locator('div[class*="modal"], div[role="dialog"]').last
+        if await dialog.count() and await dialog.is_visible():
+            dialog_text = (await dialog.text_content() or "").strip().replace("\n", " ")
+            toutiao_logger.warning(_msg("⚠️", f"发布后出现弹窗: {dialog_text[:120]!r}"))
+            if "标题" in dialog_text:
+                await page.screenshot(path="/tmp/toutiao_submit_fail.png", full_page=True)
+                toutiao_logger.error(_msg("😵", "弹窗涉及标题问题（疑似标题为空），拒绝确认，终止发布"))
+                raise RuntimeError(
+                    "平台弹窗提示标题问题（疑似标题为空），已终止发布；截图 /tmp/toutiao_submit_fail.png"
+                )
+            confirm = dialog.locator('button:has-text("确认"), button:has-text("确定")').last
+            try:
+                if await confirm.count() and await confirm.is_visible():
+                    await confirm.click()
+                    toutiao_logger.info(_msg("🧭", "已点击二次确认弹窗，继续等待跳转"))
+                    if await _wait_manage(30):
+                        await _record_success()
+                        return
+            except Exception as exc:
+                toutiao_logger.warning(_msg("😵", f"二次确认弹窗处理失败: {exc}"))
 
-        if self.debug:
-            await page.screenshot(full_page=True)
+        # 兜底：没跳转但页面出现"发布成功"提示，同样算成功（避免发了判失败）
+        if await page.locator("text=/发布成功/").count():
+            await _record_success()
+            return
+
+        await page.screenshot(path="/tmp/toutiao_submit_fail.png", full_page=True)
+        toutiao_logger.error(_msg("😵", f"点击发布后未跳转到内容管理页（当前 URL: {page.url}）"))
         raise RuntimeError("点击发布后未跳转到内容管理页，请到后台核验是否已发布，禁止重复点击发布")
 
+    async def _locate_title_input(self, page: Page):
+        """标题框定位：结构优先（article-title-wrap 容器），placeholder 精确兜底。
+
+        0907-0908 事故教训：旧兜底 div[class*="basic"] input / get_by_placeholder("请输入")
+        这类泛匹配会撞上话题框（arco InputTag 的 placeholder 就是「请输入」），
+        填错位置全程静默——泛匹配一律禁用。
+        """
+        title_input = page.locator(f"{TOUTIAO_TITLE_CONTAINER} input").first
+        if await title_input.count():
+            return title_input
+        return page.get_by_placeholder(TOUTIAO_TITLE_PLACEHOLDER, exact=True).first
+
     async def fill_title_description_and_tags(self, page: Page) -> None:
-        # 实测：标题 input 上传后已自动填入文件名，必须清空重填
-        title_input = page.get_by_placeholder("标题和简介").first
-        if not await title_input.count():
-            title_input = page.locator('div[class*="basic"] input, input.ipt').first
+        # 实测：标题 input 上传后已自动填入文件名，必须清空重填；
+        # 填完回读校验，不符就重试、重试仍失败终止——绝不发出无标题视频
+        title_input = await self._locate_title_input(page)
         await title_input.wait_for(state="visible", timeout=30000)
-        await title_input.click()
-        await page.keyboard.press("Control+KeyA")
-        await page.keyboard.press("Delete")
-        await page.keyboard.type(self.title, delay=20)
-        await asyncio.sleep(1)
+        typed = ""
+        for attempt in range(1, 4):
+            await title_input.click()
+            await page.keyboard.press("Control+KeyA")
+            await page.keyboard.press("Delete")
+            await page.keyboard.type(self.title, delay=20)
+            await asyncio.sleep(1)
+            typed = (await title_input.input_value()).strip()
+            if typed == self.title:
+                break
+            toutiao_logger.warning(_msg("😵", f"标题第 {attempt} 次回读不符（页面值: {typed!r}），重试"))
+        else:
+            await page.screenshot(path="/tmp/toutiao_title_fail.png", full_page=True)
+            raise RuntimeError(
+                f"标题填入校验失败（期望 {self.title!r}，页面 {typed!r}），已终止发布，"
+                "禁止发出无标题视频；截图 /tmp/toutiao_title_fail.png"
+            )
+        toutiao_logger.success(_msg("🥳", f"标题已填入并通过回读校验: {self.title}"))
 
         if self.desc:
-            desc_input = page.get_by_placeholder("请输入视频简介").first
+            desc_input = page.locator(TOUTIAO_DESC_SELECTOR).first
             if await desc_input.count():
                 await desc_input.click()
                 await page.keyboard.type(self.desc[:60], delay=20)
                 await asyncio.sleep(1)
+                desc_typed = (await desc_input.input_value()).strip()
+                if desc_typed == self.desc[:60].strip():
+                    toutiao_logger.success(_msg("🥳", "简介已填入并通过回读校验"))
+                else:
+                    toutiao_logger.warning(_msg("😵", f"简介回读不符（页面值: {desc_typed!r}），简介非必填，继续"))
 
-        # 话题：独立输入框，输入后从联想下拉选择；等不到候选则跳过
-        topic_input = page.get_by_placeholder("请输入，最多可添加10个话题").first
-        if not await topic_input.count():
-            topic_input = page.get_by_placeholder("请输入").first
+        # 话题：arco InputTag 组件（0908 探测），输入后从联想下拉选择；等不到候选则跳过。
+        # locator 禁止换成 placeholder 泛匹配——"请输入"会命中标题框（0907 空标题根因）
+        topic_input = page.locator(TOUTIAO_TOPIC_INPUT_SELECTOR).first
         for index, tag in enumerate(self.tags, start=1):
             toutiao_logger.info(_msg("🏷️", f"小人正在添加第 {index} 个话题: #{tag}"))
             if not await topic_input.count():
                 toutiao_logger.warning(_msg("😵", "没有找到话题输入框，跳过剩余话题"))
                 break
-            await topic_input.click()
-            await topic_input.fill(tag)
-            await page.wait_for_timeout(2000)
-            suggestion = page.locator(
-                '[class*="suggest"] li, [class*="dropdown"] li, [class*="option"]'
-            ).first
             try:
+                await topic_input.click()
+                await topic_input.fill(tag)
+                await page.wait_for_timeout(2000)
+                suggestion = page.locator(TOUTIAO_SUGGESTION_SELECTOR).first
                 if await suggestion.count() and await suggestion.is_visible():
                     await suggestion.click()
-                    await asyncio.sleep(1)
+                else:
+                    # 键盘兜底：arco InputTag 下拉在手时 ArrowDown 选中首项、Enter 成 tag
+                    await page.keyboard.press("ArrowDown")
+                    await page.keyboard.press("Enter")
+                await asyncio.sleep(1)
+                if await page.locator('[class*="input-tag"] [class*="tag"]', has_text=tag).count():
+                    toutiao_logger.success(_msg("🥳", f"话题 #{tag} 已添加"))
                 else:
                     await topic_input.fill("")
                     toutiao_logger.warning(_msg("😵", f"话题 #{tag} 没有匹配的平台候选，已跳过"))
-            except Exception:
-                await topic_input.fill("")
-                toutiao_logger.warning(_msg("😵", f"话题 #{tag} 选择失败，已跳过"))
+            except Exception as exc:
+                try:
+                    await topic_input.fill("")
+                except Exception:
+                    pass
+                toutiao_logger.warning(_msg("😵", f"话题 #{tag} 选择失败，已跳过: {exc}"))
+
+        # 话题环节正是 0907-0908 污染标题框的事故点，收尾必须再校验一次标题
+        final_title = (await title_input.input_value()).strip()
+        if final_title != self.title:
+            await page.screenshot(path="/tmp/toutiao_title_fail.png", full_page=True)
+            raise RuntimeError(
+                f"话题步骤后标题被改动（页面值 {final_title!r}），已终止发布；"
+                "截图 /tmp/toutiao_title_fail.png"
+            )
 
     async def upload(self, playwright: Playwright) -> None:
         toutiao_logger.info(_msg("🧍", "小人先检查 cookie、视频文件、封面和发布时间"))
@@ -608,8 +714,10 @@ class ToutiaoVideo(BaseVideoUploader):
             await upload_input.set_input_files(self.file_path)
             await asyncio.sleep(2)
 
-            await self.fill_title_description_and_tags(page)
+            # 标题/话题在上传完成后再填：上传刚启动时表单仍在初始化，
+            # 过早交互是 0907-0908 填写不稳定的诱因之一
             await self.wait_for_upload_complete(page)
+            await self.fill_title_description_and_tags(page)
             await self.set_activity(page)
             await self.set_thumbnail(page)
             await self.apply_declaration(page)
