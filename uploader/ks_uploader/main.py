@@ -30,7 +30,8 @@ KUAISHOU_MANAGE_URL_PATTERN = "**/article/manage/video?status=2&from=publish**"
 KUAISHOU_COOKIE_INVALID_SELECTOR = "div.names div.container div.name:text('机构服务')"
 KUAISHOU_PUBLISH_STRATEGY_IMMEDIATE = "immediate"
 KUAISHOU_PUBLISH_STRATEGY_SCHEDULED = "scheduled"
-# 发布页话题输入的实际上限未经官方文档确认，5 为保守值；超限截断时打警告。
+# 2026-09-09 复核：快手话题上限 5 个（多源运营共识，非官方文档，以发布页实测为准）；
+# 超限截断时打警告。
 KUAISHOU_MAX_TAGS = 5
 # 活动入口（2026-09-06 实测）：表单"活动推荐"区直接内嵌活动卡片，css-module 哈希前的类名前缀稳定
 KUAISHOU_ACTIVITY_CARD_SELECTOR = '[class*="_activity__item_3v4ib_1"]'

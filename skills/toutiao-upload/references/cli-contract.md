@@ -56,7 +56,7 @@ sau toutiao upload-video \
   - `--title`（不超过 30 字，超限直接报错）
 - 可选参数:
   - `--desc`
-  - `--tags`（最多取前 5 个，超限截断并告警）
+  - `--tags`（最多 10 个，超限截断并告警；0908 探测实测话题可打满 10）
   - `--extra-tag-pool`（conf.PLATFORM_EXTRA_TAG_POOLS 里的组名，可重复传）
   - `--schedule`
   - `--thumbnail`

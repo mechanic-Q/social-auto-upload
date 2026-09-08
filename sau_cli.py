@@ -803,6 +803,7 @@ def build_parser() -> argparse.ArgumentParser:
     bilibili_upload_video_parser.add_argument("--desc", required=True, help="Video description")
     bilibili_upload_video_parser.add_argument("--tid", required=True, type=int, help="Bilibili category id")
     bilibili_upload_video_parser.add_argument("--tags", default="", help="Comma-separated tags, such as tag1,tag2")
+    bilibili_upload_video_parser.add_argument("--extra-tag-pool", action="append", default=[], help="Extra tag pool name in conf.PLATFORM_EXTRA_TAG_POOLS to append (repeatable)")
     bilibili_upload_video_parser.add_argument("--schedule", type=schedule_value, help=f"Schedule time in {schedule_help}")
     bilibili_upload_video_parser.add_argument("--thumbnail", type=existing_file_path, help="Optional 16:9 cover image path")
 
@@ -1190,7 +1191,7 @@ async def dispatch(args: argparse.Namespace) -> int:
                 title=args.title,
                 description=args.desc,
                 tid=args.tid,
-                tags=parse_tags(args.tags),
+                tags=merge_tags(parse_tags(args.tags), resolve_extra_tags("bilibili", args.extra_tag_pool)),
                 publish_date=args.schedule or 0,
                 thumbnail_file=args.thumbnail,
             )
