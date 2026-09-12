@@ -84,6 +84,19 @@ def _has_persistent_profile(account_file: str | Path) -> bool:
     return profile_dir.exists() and any(profile_dir.iterdir())
 
 
+def _load_session_ua(account_file: str | Path) -> str | None:
+    """会话绑 UA（2026-09-12）：真实浏览器扫码登录的 session 校验 UA，
+    侧车文件 cookies/tencent_<账号>.ua 存在则注入 context user_agent。"""
+    ua_path = Path(_resolve_account_file(account_file)).with_suffix(".ua")
+    try:
+        if ua_path.exists():
+            ua = ua_path.read_text(encoding="utf-8").strip()
+            return ua or None
+    except Exception:
+        pass
+    return None
+
+
 def _has_tencent_login_state(account_file: str | Path) -> bool:
     account_file = _resolve_account_file(account_file)
     return Path(account_file).exists() or _has_persistent_profile(account_file)
@@ -103,16 +116,24 @@ async def _launch_tencent_context(
     if persistent:
         profile_dir = Path(_resolve_persistent_profile_dir(account_file))
         profile_dir.mkdir(parents=True, exist_ok=True)
+        launch_kwargs = _build_launch_kwargs(headless=headless)
+        ua = _load_session_ua(account_file)
+        if ua:
+            launch_kwargs["user_agent"] = ua
         context = await playwright.chromium.launch_persistent_context(
             str(profile_dir),
-            **_build_launch_kwargs(headless=headless),
+            **launch_kwargs,
         )
         return context, None
 
     browser = await playwright.chromium.launch(**_build_launch_kwargs(headless=headless))
     try:
         if storage_state:
-            context = await browser.new_context(storage_state=account_file)
+            ctx_kwargs = {"storage_state": account_file}
+            ua = _load_session_ua(account_file)
+            if ua:
+                ctx_kwargs["user_agent"] = ua
+            context = await browser.new_context(**ctx_kwargs)
         else:
             context = await browser.new_context()
         return context, browser
