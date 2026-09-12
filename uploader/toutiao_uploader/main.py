@@ -559,7 +559,7 @@ class ToutiaoVideo(BaseVideoUploader):
             await _record_success()
             return
 
-        # 可能出现二次确认弹窗（声明提醒/发布确认）。必须先读弹窗文案再决定：
+        # 可能出现二次确认弹窗（声明提醒/发布确认/平台推广）。必须先读弹窗文案再决定：
         # 标题相关警告（如空标题确认发布）绝不能替用户点确认——0907/0908 的
         # 无标题视频正是盲点 .last 确认按钮发出去的
         await page.wait_for_timeout(1500)
@@ -573,7 +573,12 @@ class ToutiaoVideo(BaseVideoUploader):
                 raise RuntimeError(
                     "平台弹窗提示标题问题（疑似标题为空），已终止发布；截图 /tmp/toutiao_submit_fail.png"
                 )
-            confirm = dialog.locator('button:has-text("确认"), button:has-text("确定")').last
+            # 0909 实测：西瓜创作推广弹窗「你的创作突破来啦」的取消/确定不是 <button>
+            # 标签（div/span），button:has-text() 匹配不到 → 弹窗留在原地挡住跳转，
+            # 发布其实已生效（假阴性 + 重复补发）。改用文本定位任意可点元素。
+            confirm = dialog.get_by_text("确定", exact=True).last
+            if not await confirm.count():
+                confirm = dialog.get_by_text("确认", exact=True).last
             try:
                 if await confirm.count() and await confirm.is_visible():
                     await confirm.click()
@@ -584,10 +589,27 @@ class ToutiaoVideo(BaseVideoUploader):
             except Exception as exc:
                 toutiao_logger.warning(_msg("😵", f"二次确认弹窗处理失败: {exc}"))
 
-        # 兜底：没跳转但页面出现"发布成功"提示，同样算成功（避免发了判失败）
+        # 兜底1：没跳转但页面出现"发布成功"提示，同样算成功（避免发了判失败）
         if await page.locator("text=/发布成功/").count():
             await _record_success()
             return
+
+        # 兜底2（0909 假阴性根治）：发布点击可能已生效（弹窗/慢跳转挡住判据），
+        # 到小视频管理页查列表是否出现本条标题，出现即成功，禁止再补发
+        toutiao_logger.info(_msg("🧭", "未跳转管理页，去后台列表核验是否实际已发布"))
+        try:
+            check = page
+            if "/xigua/" not in page.url and "/manage" not in page.url:
+                await check.goto("https://mp.toutiao.com/profile_v4/xigua/small-video",
+                                 wait_until="domcontentloaded")
+            await check.wait_for_timeout(8000)
+            probe = (self.title or "")[:12]
+            if probe and probe in (await check.inner_text("body")):
+                toutiao_logger.warning(_msg("⚠️", "管理列表已出现本条标题：发布实际已生效（假阴性），按成功处理"))
+                await _record_success()
+                return
+        except Exception as exc:
+            toutiao_logger.warning(_msg("😵", f"列表核验失败（不影响结论）: {exc}"))
 
         await page.screenshot(path="/tmp/toutiao_submit_fail.png", full_page=True)
         toutiao_logger.error(_msg("😵", f"点击发布后未跳转到内容管理页（当前 URL: {page.url}）"))
