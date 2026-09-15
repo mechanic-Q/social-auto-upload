@@ -282,3 +282,16 @@ CDP 导出 cookie+localStorage → 组装 storage_state 写回 json → 清理 `
 **持久 profile 已废弃**（`_has_persistent_profile` 恒 False）：profile 存在会遮蔽 json 更新，
 导致「导了新 cookie 仍判失效」。cookie 校验（cookie_auth）导航已放宽到 60s+domcontentloaded，
 5s 硬超时误判有效会话的问题已根治。
+
+
+## 快手（kuaishou）封面保障定稿路径（2026-09-15）
+
+> **上传日志「封面已经设置完成」≠ 平台侧封面存活**：0913/0914 两期日志全绿，平台实际展示视频截帧（回落机制未知）。
+
+已固化三层防线：
+
+1. **发布后自动核验**（`ks_uploader.KSVideo`，默认开启）：发布成功等 90s → 管理页抓本条缩略图 → 与 `--thumbnail` 本地封面感知哈希比对（阈值 200）→ 疑似丢失自动进编辑页重传一次（新/旧两版弹窗自适应）→ 提交标志 = POST `rest/cp/works/v2/video/pc/edit/submit`。核验异常不阻塞发布结果，仅打 WARNING。
+2. **存量批量核查**：`python3 tools_ks_cover_audit.py --limit 20 --ref <本地封面.png>`（颜色数判占位 + 可选哈希距离）。
+3. **人工兜底**（自动补传确认失败时）：创作者后台 → 作品管理 → hover 编辑作品 → 编辑封面 → （新版：上传tab直选 file input；旧版 cropper：**先点「清空上传」**再点裁剪区触发 filechooser）→ 3:4 → 完成 → **点编辑页底部「发布」div**（`div._button_3a3lq_1._button-primary_3a3lq_60`，非 button 标签；成功标志=edit/submit POST，页面跳 about:blank 属正常）。
+
+坑：新封面有 CDN 转码期（几分钟内 214x374 纯色占位 725B），核验遇占位等 2-3 分钟再判；「封面应用成功」toast 只是前端状态，不点编辑页「发布」刷新即丢。
