@@ -96,11 +96,16 @@ sau stats trend --only bilibili --external-id BV1xx411c7mD   # 单作品增长�
 | 抖音 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 当前主线重构最完整 |
 | Bilibili | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | 运行时自动准备 `biliup` |
 | 小红书（浏览器版） | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 浏览器自动化，CLI/Skill 已接入 |
-| 快手 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 浏览器自动化，CLI/Skill 初版已接入 |
-| 视频号 | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ | 对应 `tencent_uploader` |
+| 快手 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 浏览器自动化；发布后封面存活核验+编辑页自动补传已内建（`_verify_and_refill_cover`） |
+| 视频号 | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ | 对应 `tencent_uploader`；cookie 走 Windows Chrome CDP 导出单一事实源（`_has_persistent_profile` 已废弃） |
 | 百家号 | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ | 浏览器自动化 |
 | TikTok | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ | 当前示例走 Chrome 版实现 |
 | YouTube | ✅ | ✅ | ❌ | ❌ | ✅ | ❌ | 浏览器自动化（Studio），支持加入播放列表/可见性 |
+
+### 视频号 cookie 与快手封面运维定稿（2026-09-15）
+
+- **视频号 cookie 刷新**：Windows Chrome（`--remote-debugging-port=9222`）登录视频号后台 → `bash video-pipeline/scripts/tencent_refresh_cookie.sh <账号> --launch` 一键 CDP 导出+写入+校验。禁用 `sau tencent login`（WSL 扫码二维码 2 分钟过期）。持久 profile 已废弃（会遮蔽 json 更新），cookie 单一事实源 = `cookies/tencent_<账号>.json` + `.ua` 侧车。
+- **快手封面三层防线**：①发布后 90s 自动核验缩略图哈希（阈值 200），疑似丢失自动编辑页补传一次；②存量核查 `python3 tools_ks_cover_audit.py --limit 20 --ref <封面.png>`；③人工兜底链路见 `docs/CLI.md`（编辑页「发布」div 提交，`edit/submit` POST 为成功标志）。
 
 ### AI这么强，为什么还需要这个项目
 在你使用AI的能力，browser agent等等，每次都让 agent 重新解析网页、截图理解, 临场判断

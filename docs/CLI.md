@@ -283,6 +283,7 @@ CDP 导出 cookie+localStorage → 组装 storage_state 写回 json → 清理 `
 导致「导了新 cookie 仍判失效」。cookie 校验（cookie_auth）导航已放宽到 60s+domcontentloaded，
 5s 硬超时误判有效会话的问题已根治。
 
+
 ## 快手（kuaishou）封面保障定稿路径（2026-09-15）
 
 > **上传日志「封面已经设置完成」≠ 平台侧封面存活**：0913/0914 两期日志全绿，平台实际展示视频截帧（回落机制未知）。
