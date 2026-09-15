@@ -265,3 +265,20 @@ Bilibili 额外要求：
 - 小红书：支持多张图片，正文 `--note` 可选，但 `--title` 建议始终显式传入
 
 后续维护 CLI 时，优先看 `sau_cli.py`、`uploader/` 和 `skills/`。
+
+## 视频号（tencent）登录与 cookie 刷新定稿路径（2026-09-15）
+
+> **禁止用 `sau tencent login`（WSL xvfb 扫码）**：二维码 2 分钟过期，无人值守必超时（0915 三连败实证）。
+> 定稿路径 = Windows Chrome 真浏览器登录 + CDP 导出，cookie 单一事实源 = `cookies/tencent_<账号>.json` + `.ua` 侧车。
+
+```bash
+# 一键刷新（9222 不在线时加 --launch 自动拉 Chrome 并打开视频号后台）
+bash /home/lmr/.hermes/skills/video-production/video-pipeline/scripts/tencent_refresh_cookie.sh diyi --launch
+```
+
+流程：Chrome `--remote-debugging-port=9222` 打开视频号后台 → 微信扫码（网页版二维码不过期）→
+CDP 导出 cookie+localStorage → 组装 storage_state 写回 json → 清理 `cookies/tencent_profiles/` 影子 → `sau tencent check`。
+
+**持久 profile 已废弃**（`_has_persistent_profile` 恒 False）：profile 存在会遮蔽 json 更新，
+导致「导了新 cookie 仍判失效」。cookie 校验（cookie_auth）导航已放宽到 60s+domcontentloaded，
+5s 硬超时误判有效会话的问题已根治。

@@ -80,8 +80,12 @@ def _resolve_persistent_profile_dir(account_file: str | Path) -> str:
 
 
 def _has_persistent_profile(account_file: str | Path) -> bool:
-    profile_dir = Path(_resolve_persistent_profile_dir(account_file))
-    return profile_dir.exists() and any(profile_dir.iterdir())
+    """持久 profile 已废弃（2026-09-15 实证）：
+    profile 存在时会遮蔽 tencent_<账号>.json 的 cookie 更新——CDP 重导后
+    check 仍读旧 session 导致「导了新 cookie 却判失效」。cookie 单一事实源 =
+    cookies/tencent_<账号>.json + .ua 侧车，恒走 storage_state 路径。
+    保留函数只为兼容旧调用点，恒返回 False。"""
+    return False
 
 
 def _load_session_ua(account_file: str | Path) -> str | None:
@@ -180,8 +184,13 @@ async def cookie_auth(account_file, headless: bool = True):
             context, browser = await _launch_tencent_context(playwright, account_file, headless=headless)
             context = await set_init_script(context)
             page = await context.new_page()
-            await page.goto(TENCENT_UPLOAD_URL)
-            await page.wait_for_url(TENCENT_UPLOAD_URL, timeout=5000)
+            # 导航用宽松超时+domcontentloaded（2026-09-15 实证：5s 硬超时会把
+            # 有效会话误判失效——SPA 慢跳转触发 wait_for_url Timeout 走 except 分支）
+            await page.goto(TENCENT_UPLOAD_URL, timeout=60000, wait_until="domcontentloaded")
+            try:
+                await page.wait_for_url(TENCENT_UPLOAD_URL, timeout=15000)
+            except Exception:
+                pass
 
             # 视频号助手 SPA 异步重定向：session 无效时先短暂停在 upload URL，
             # 然后跳转到 /login.html。等待重定向完成后再判断。
