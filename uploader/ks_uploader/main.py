@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import os
 from datetime import datetime
 from pathlib import Path
@@ -371,6 +372,11 @@ async def get_ks_cookie(
     return result
 
 
+KUAISHOU_MAX_TAGS = 5  # 话题保守上限（本地口径移植，video-pipeline#95）
+KUAISHOU_ACTIVITY_CARD_SELECTOR = '[class*="_activity__item_3v4ib_1"]'
+KUAISHOU_ACTIVITY_TITLE_SELECTOR = '[class*="_activity__item_main_title_"]'
+
+
 class KSBaseUploader(BaseVideoUploader):
     def __init__(
         self,
@@ -450,6 +456,88 @@ class KSBaseUploader(BaseVideoUploader):
         await asyncio.sleep(2)
         kuaishou_logger.info(f"✅ 定时发布时间已设置为 {publish_date_str}")
 
+    def _activity_cards(self, page: Page):
+        """返回表单"活动推荐"区的活动卡片列表；表单未渲染时为空。"""
+        return page.locator(KUAISHOU_ACTIVITY_CARD_SELECTOR)
+
+    async def _read_activity_cards(self, page: Page) -> list[dict]:
+        cards = []
+        for i in range(await self._activity_cards(page).count()):
+            card = self._activity_cards(page).nth(i)
+            title_el = card.locator(KUAISHOU_ACTIVITY_TITLE_SELECTOR).first
+            title = (await title_el.inner_text()).strip() if await title_el.count() else ""
+            # 用文本判断而非可见定位：卡片在视口外时按钮元素依然存在
+            card_text = await card.inner_text()
+            oper = "unknown"
+            for text in ("已添加", "去领取", "添加"):
+                if text in card_text:
+                    oper = text
+                    break
+            cards.append({"name": title, "status": oper})
+        return cards
+
+    async def set_activity(self, page: Page) -> None:
+        """在表单"活动推荐"区选中指定活动；活动未领取时先走领取弹窗。显式传了
+        activity 却没能选中时终止发布（防止发出与预期不符的内容）。"""
+        if not self.activity:
+            return
+
+        kuaishou_logger.info(_msg("🎯", f"小人准备参加创作活动: {self.activity}"))
+        await self.close_guide_overlay(page)
+        cards = self._activity_cards(page)
+        try:
+            await cards.first.wait_for(state="visible", timeout=20000)
+        except Exception:
+            raise RuntimeError(
+                "发布页没有渲染出活动推荐区（可能视频尚未上传完成或平台改版），"
+                f"无法参加活动 '{self.activity}'。为避免发布与预期不符，已终止。"
+            )
+
+        target = None
+        for i in range(await cards.count()):
+            card = cards.nth(i)
+            title_el = card.locator(KUAISHOU_ACTIVITY_TITLE_SELECTOR).first
+            if await title_el.count() and (await title_el.inner_text()).strip() == self.activity:
+                target = card
+                break
+        if target is None:
+            available = [c["name"] for c in await self._read_activity_cards(page)]
+            raise RuntimeError(
+                f"活动推荐区没有匹配到活动 '{self.activity}'（当前候选: {available}）。"
+                f"请用 `sau kuaishou list-activities --account <账号>` 查看可参加的活动名后重试。"
+            )
+
+        # 已领取的活动显示"添加"；未领取的显示"去领取"，需先在弹窗里"立即领取"
+        if await target.get_by_text("去领取", exact=True).count():
+            kuaishou_logger.info(_msg("🎯", f"活动 '{self.activity}' 尚未领取，小人先去领取"))
+            await target.get_by_text("去领取", exact=True).first.click()
+            claim_btn = page.get_by_text("立即领取", exact=True).first
+            await claim_btn.wait_for(state="visible", timeout=15000)
+            await claim_btn.click()
+            await page.wait_for_timeout(3000)
+            # 关闭活动详情弹窗（优先文字按钮，退回右上角 X）
+            for txt in ("知道了", "关 闭", "关闭", "确定", "完成"):
+                btn = page.get_by_text(txt, exact=True).first
+                if await btn.count() and await btn.is_visible():
+                    await btn.click()
+                    break
+            else:
+                close_x = page.locator(".ant-modal-close").first
+                if await close_x.count():
+                    await close_x.click()
+            await page.wait_for_timeout(2000)
+            await self.close_guide_overlay(page)
+
+        add_btn = target.get_by_text("添加", exact=True).first
+        if not await add_btn.count():
+            raise RuntimeError(
+                f"活动 '{self.activity}' 的卡片上没有'添加'按钮（可能尚未领取活动任务），已终止发布。"
+            )
+        await add_btn.click()
+        await page.wait_for_timeout(2000)
+        kuaishou_logger.success(_msg("🥳", f"已选择活动: {self.activity}"))
+
+
     async def close_guide_overlay(self, page: Page) -> bool:
         """关闭快手创作者平台的 Joyride 引导遮罩。
 
@@ -520,6 +608,7 @@ class KSVideo(KSBaseUploader):
         thumbnail_path=None,
         desc: str | None = None,
         collection_name: str | None = None,
+        activity: str | None = None,
     ):
         super().__init__(
             publish_date=publish_date,
@@ -533,6 +622,7 @@ class KSVideo(KSBaseUploader):
         self.tags = tags or []
         self.thumbnail_path = thumbnail_path
         self.desc = desc or ""
+        self.activity = activity
         self.collection_name = collection_name
 
     async def apply_collection(self, page: Page) -> None:
@@ -581,6 +671,12 @@ class KSVideo(KSBaseUploader):
         self.file_path = str(self.validate_video_file(self.file_path))
         if self.thumbnail_path:
             self.thumbnail_path = str(self.validate_image_file(self.thumbnail_path))
+        if len(self.tags) > KUAISHOU_MAX_TAGS:
+            kuaishou_logger.warning(
+                _msg("🏷️", f"话题 {len(self.tags)} 个超过保守上限 {KUAISHOU_MAX_TAGS} 个，"
+                            f"仅使用前 {KUAISHOU_MAX_TAGS} 个: {self.tags[:KUAISHOU_MAX_TAGS]}")
+            )
+            self.tags = self.tags[:KUAISHOU_MAX_TAGS]
 
     async def handle_upload_error(self, page: Page):
         kuaishou_logger.warning(_msg("😵", "视频上传摔了一跤，小人马上重新上传"))
@@ -614,6 +710,243 @@ class KSVideo(KSBaseUploader):
 
         await modal.wait_for(state="hidden", timeout=30000)
         kuaishou_logger.success(_msg("🥳", "封面已经设置完成"))
+
+    @staticmethod
+    def _ahash(img_bytes: bytes) -> str | None:
+        """64bit average hash；依赖缺失或解析失败返回 None（调用方跳过比对）。"""
+        try:
+            import io
+
+            from PIL import Image
+
+            im = Image.open(io.BytesIO(img_bytes)).convert("RGB").resize((32, 32))
+            pixels = list(im.getdata())
+            avg = sum(sum(p) for p in pixels) / (len(pixels) * 3)
+            return "".join("1" if sum(p) / 3 > avg else "0" for p in pixels)
+        except Exception:
+            return None
+
+    async def _verify_and_refill_cover(self, page: Page) -> None:
+        """发布后封面存活核验 + 编辑页自动补传（≤1 轮）。
+
+        判据：管理页本条作品缩略图 vs 本地封面文件的感知哈希距离。
+        距离阈值 200（同图裁剪版约 <100，截帧 >300；0915 实测定标）。
+        新封面有 CDN 转码期（几分钟内可能是黑占位/帧图），首验前等 90s 降低误报。
+        """
+        import urllib.request
+
+        if not self._ahash(Path(self.thumbnail_path).read_bytes()):
+            kuaishou_logger.warning(_msg("⚠️", "缺 PIL 无法做封面哈希比对，跳过发布后核验"))
+            return
+
+        kuaishou_logger.info(_msg("🔍", "发布后封面核验：等 90s 让平台落库…"))
+        await asyncio.sleep(90)
+
+        ref = self._ahash(Path(self.thumbnail_path).read_bytes())
+        thumb_url = None
+        for wait_round in range(3):
+            await page.goto("https://cp.kuaishou.com/article/manage/video",
+                            wait_until="domcontentloaded", timeout=60000)
+            await asyncio.sleep(12)
+            thumb_url = await page.evaluate(
+                """() => {
+                    const it = [...document.querySelectorAll('div.video-item')]
+                        .find(e => (e.innerText||'').includes(%s));
+                    const img = it ? it.querySelector('img') : null;
+                    return img ? (img.currentSrc || img.src) : null;
+                }"""
+                % json.dumps((self.title or "")[:20].split("#")[0].strip()[:15])
+            )
+            if thumb_url and thumb_url.startswith("http"):
+                break
+            await asyncio.sleep(10)
+
+        if not (thumb_url and thumb_url.startswith("http")):
+            kuaishou_logger.warning(_msg("⚠️", "管理页未抓到本条缩略图，封面核验未完成，请人工确认"))
+            return
+
+        try:
+            req = urllib.request.Request(thumb_url, headers={"User-Agent": "Mozilla/5.0"})
+            remote = self._ahash(urllib.request.urlopen(req, timeout=15).read())
+        except Exception as exc:
+            kuaishou_logger.warning(_msg("⚠️", f"缩略图下载失败，封面核验未完成: {exc}"))
+            return
+        if remote is None or ref is None:
+            kuaishou_logger.warning(_msg("⚠️", "哈希计算失败，封面核验未完成"))
+            return
+
+        dist = sum(a != b for a, b in zip(ref, remote))
+        if dist < 200:
+            kuaishou_logger.success(_msg("🥳", f"封面存活确认（哈希距离 {dist}）"))
+            return
+
+        kuaishou_logger.warning(_msg("⚠️", f"封面疑似丢失（距离 {dist} ≥ 200，显示的不是上传封面），自动进编辑页重传"))
+        await self._refill_cover_via_edit(page, thumb_url)
+
+    async def _refill_cover_via_edit(self, page: Page, old_thumb_url: str) -> bool:
+        """编辑页补传封面（0915 定稿链路）：编辑作品 → 编辑封面 → 清空上传 →
+        filechooser 传图 → 3:4 → 完成 → 发布。成功标志 = edit/submit POST + 缩略图变化。"""
+        work_id = old_thumb_url.split("clientCacheKey=")[-1].split("_")[0] if "clientCacheKey=" in old_thumb_url else None
+        if not work_id:
+            kuaishou_logger.warning(_msg("😵", "无法从缩略图 URL 解出 workId，放弃自动补传"))
+            return False
+
+        import re
+
+        from patchright.async_api import async_playwright
+
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(
+                headless=True,
+                executable_path=LOCAL_CHROME_PATH or None,
+            )
+            ctx = await browser.new_context(storage_state=self.account_file)
+            pg = await ctx.new_page()
+            edit_submitted = False
+            try:
+                for attempt in range(2):  # 编辑页偶发「应用加载失败」，一次重试
+                    await pg.goto(f"https://cp.kuaishou.com/article/edit/video?workId={work_id}",
+                                  wait_until="domcontentloaded", timeout=60000)
+                    await asyncio.sleep(12)
+                    if "应用加载失败" in (await pg.inner_text("body")):
+                        continue
+
+                    await pg.get_by_text("编辑封面", exact=True).first.click()
+                    await asyncio.sleep(3)
+
+                    # 新版界面（上传封面 tab + 直选 file input）优先；旧版 cropper 走清空+点击
+                    file_input = pg.locator('input[type="file"]')
+                    if await file_input.count():
+                        await pg.get_by_text("上传封面", exact=True).first.click()
+                        await asyncio.sleep(1)
+                        await file_input.first.set_input_files(self.thumbnail_path)
+                        await asyncio.wait_for(pg.wait_for_selector("text=清空上传", timeout=15000), timeout=15)
+                        try:
+                            await pg.get_by_text("3:4", exact=True).first.click()
+                            await asyncio.sleep(1.5)
+                        except Exception:
+                            pass
+                        await pg.locator("button:has-text('确认')").first.click()
+                    else:
+                        await pg.get_by_text("清空上传", exact=True).first.click()
+                        await asyncio.sleep(2)
+                        async with pg.expect_file_chooser(timeout=8000) as fc_info:
+                            await pg.locator("div[class*='_cropper-main_'], div[class*='_cropper_']").first.click()
+                        chooser = await fc_info.value
+                        await chooser.set_files(self.thumbnail_path)
+                        done_btn = pg.locator("button:has-text('完成')").first
+                        for _ in range(30):
+                            if not await done_btn.is_disabled():
+                                break
+                            await asyncio.sleep(1)
+                        await done_btn.click()
+                        await asyncio.sleep(3)
+                        try:
+                            await pg.get_by_text("3:4", exact=True).first.click()
+                            await asyncio.sleep(1.5)
+                        except Exception:
+                            pass
+
+                    await asyncio.sleep(2)
+                    # 编辑页提交按钮是 div 文本「发布」（非 button，0915 实证）
+                    publish_div = pg.locator("div._button_3a3lq_1._button-primary_3a3lq_60", has_text="发布").first
+                    await publish_div.wait_for(state="visible", timeout=15000)
+                    submit_flag = {"hit": False}
+
+                    def _on_request(req):
+                        if "edit/submit" in req.url and req.method == "POST":
+                            submit_flag["hit"] = True
+
+                    page.on("request", _on_request)
+                    await publish_div.click()
+                    await asyncio.sleep(5)
+                    edit_submitted = submit_flag["hit"]
+                    kuaishou_logger.info(
+                        _msg("🚀", f"编辑页封面重传已提交（edit/submit={'命中' if edit_submitted else '未确认'}）")
+                    )
+                    break
+            finally:
+                await ctx.close()
+                await browser.close()
+
+        if not edit_submitted:
+            kuaishou_logger.warning(_msg("😵", "自动补传未确认提交成功，请到创作者后台人工核验封面"))
+            return False
+
+        # 等转码再验一次（占位图期间是纯色小块）
+        await asyncio.sleep(120)
+        recheck = await self._fetch_cover_hash_by_work(work_id)
+        if recheck is None:
+            kuaishou_logger.info(_msg("🔍", "补传后缩略图仍在转码（占位中），稍后可在后台确认"))
+            return True
+        ref = self._ahash(Path(self.thumbnail_path).read_bytes())
+        dist = sum(a != b for a, b in zip(ref, recheck))
+        if dist < 200:
+            kuaishou_logger.success(_msg("🥳", f"封面补传成功（哈希距离 {dist}）"))
+            return True
+        kuaishou_logger.warning(_msg("⚠️", f"补传后距离仍偏大（{dist}），可能仍在转码，请稍后人工确认"))
+        return True
+
+    async def _fetch_cover_hash_by_work(self, work_id: str) -> str | None:
+        """从作品列表 API 精准取该 work 的 publishCoverUrl 并算哈希（占位图/失败返回 None）。"""
+        import io
+        import json as _json
+        import urllib.request
+
+        from patchright.async_api import async_playwright
+
+        captured = []
+
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(
+                headless=True,
+                executable_path=LOCAL_CHROME_PATH or None,
+            )
+            ctx = await browser.new_context(storage_state=self.account_file)
+            page = await ctx.new_page()
+
+            async def on_resp(resp):
+                if "photo/list" in resp.url and resp.status == 200:
+                    try:
+                        captured.append(await resp.json())
+                    except Exception:
+                        pass
+
+            page.on("response", on_resp)
+            try:
+                await page.goto("https://cp.kuaishou.com/article/manage/video",
+                                wait_until="domcontentloaded", timeout=60000)
+                await asyncio.sleep(12)
+            finally:
+                await ctx.close()
+                await browser.close()
+
+        cover_url = None
+        for data in captured:
+            stack = [data]
+            while stack:
+                node = stack.pop()
+                if isinstance(node, dict):
+                    if node.get("workId") == work_id and node.get("publishCoverUrl"):
+                        cover_url = node["publishCoverUrl"]
+                        break
+                    stack.extend(node.values())
+                elif isinstance(node, list):
+                    stack.extend(node)
+            if cover_url:
+                break
+        if not cover_url:
+            return None
+        try:
+            req = urllib.request.Request(cover_url, headers={"User-Agent": "Mozilla/5.0"})
+            img_bytes = urllib.request.urlopen(req, timeout=15).read()
+        except Exception:
+            return None
+        im_hash = self._ahash(img_bytes)
+        # 占位图特征：字节数极小（<1.5KB 的 214x374 纯色块）视为未就绪
+        if len(img_bytes) < 1500:
+            return None
+        return im_hash
 
     async def upload(self, playwright: Playwright) -> None:
         kuaishou_logger.info(_msg("🧍", "小人先检查 cookie、视频文件、封面和发布时间"))
@@ -702,6 +1035,7 @@ class KSVideo(KSBaseUploader):
                 )
 
             await self.set_thumbnail(page)
+            await self.set_activity(page)
 
             await self.apply_collection(page)
 
@@ -723,6 +1057,13 @@ class KSVideo(KSBaseUploader):
 
                     await page.wait_for_url(KUAISHOU_MANAGE_URL_PATTERN, timeout=5000)
                     kuaishou_logger.success(_msg("🥳", "视频发布成功，小人开心收工"))
+                    # 发布后封面核验（本地 0915 定稿链路移植，video-pipeline#95）：
+                    # set_thumbnail 日志成功 ≠ 平台侧封面存活；核验异常不影响发布结果
+                    if self.thumbnail_path:
+                        try:
+                            await self._verify_and_refill_cover(page)
+                        except Exception as exc:
+                            kuaishou_logger.warning(_msg("⚠️", f"发布后封面核验异常（不影响发布结果）: {exc}"))
                     break
                 except Exception as exc:
                     last_publish_error = exc
