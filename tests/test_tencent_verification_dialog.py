@@ -5,11 +5,20 @@ from patchright.async_api import async_playwright
 
 from uploader.tencent_uploader.main import TencentBaseUploader
 
+def _chrome_launch_kwargs():
+    # 本机无 Google Chrome 发行版时回退 patchright chromium——被测对象是对话框
+    # 点击逻辑，与浏览器发行版无关（fork 环境适配，video-pipeline#98）
+    import os
+    import shutil
+    has_chrome = shutil.which("google-chrome") or os.path.exists("/opt/google/chrome/chrome")
+    return {"channel": "chrome"} if has_chrome else {}
+
+
 
 def test_wait_for_realtime_verification_saves_qr_and_resumes(tmp_path: Path):
     async def scenario():
         async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch(headless=True, channel="chrome")
+            browser = await playwright.chromium.launch(headless=True, **_chrome_launch_kwargs())
             page = await browser.new_page()
             await page.set_content(
                 """
