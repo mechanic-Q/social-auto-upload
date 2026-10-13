@@ -236,6 +236,8 @@ class BrowserCliDispatchTests(unittest.TestCase):
             note="图文正文",
             tags="测试,图文",
             schedule=0,
+            notef="",
+            bgm="",
             debug=False,
             headless=True,
         )
@@ -262,6 +264,7 @@ class BrowserCliDispatchTests(unittest.TestCase):
             product_link="",
             product_title="",
             declaration="已确认声明原文",
+            collection=None,
             debug=False,
             headless=True,
         )
@@ -289,6 +292,7 @@ class BrowserCliDispatchTests(unittest.TestCase):
             short_title=None,
             category=None,
             draft=False,
+            collection=None,
             debug=False,
             headless=True,
         )

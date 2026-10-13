@@ -72,20 +72,29 @@ class FakeThumbnailPage:
 
 
 class FakePublishButton(FakeLocator):
-    """匹配 2026-09 实现: 发布走 Locator.first.click(), 不再经 element_handle/evaluate。"""
+    """匹配上游实现: 发表按钮经 get_by_role 定位, 以「按钮消失」确认发布生效。"""
 
     def __init__(self, page=None):
         super().__init__(count=1)
         self._page = page
+        self._clicked = False
 
     @property
     def first(self):
         return self
 
-    async def element_handle(self):
-        return self
+    async def count(self):
+        return 0 if self._clicked else self._count
+
+    async def is_visible(self):
+        return not self._clicked
 
     async def click(self, **_kwargs):
+        self._clicked = True
+        if self._page is not None:
+            self._page.publish_clicks += 1
+
+    async def evaluate(self, _script):
         if self._page is not None:
             self._page.publish_clicks += 1
 
@@ -94,7 +103,6 @@ class FakePublishPage:
     def __init__(self):
         self.url = "https://channels.weixin.qq.com/platform/post/create"
         self.publish_clicks = 0
-        self.navigation_attempts = 0
         self.publish_button = FakePublishButton(self)
 
     def locator(self, selector):
@@ -102,13 +110,11 @@ class FakePublishPage:
             return self.publish_button
         return FakeLocator(count=0)
 
-    async def evaluate(self, _script, arg=None):
-        if arg is self.publish_button:
-            self.publish_clicks += 1
+    def get_by_role(self, _role, **_kwargs):
+        return self.publish_button
 
-    async def wait_for_url(self, *_args, **_kwargs):
-        self.navigation_attempts += 1
-        raise TimeoutError("SPA did not confirm navigation")
+    async def evaluate(self, _script, arg=None):
+        return None
 
 
 class TencentThumbnailTests(unittest.IsolatedAsyncioTestCase):
@@ -176,11 +182,12 @@ class TencentThumbnailTests(unittest.IsolatedAsyncioTestCase):
         set_thumbnail.assert_awaited_once()
 
     async def test_publish_navigation_failure_does_not_click_twice(self):
+        # 上游实现形态：发表后以「URL 离开创建页或按钮消失」确认成功。
+        # 保留本地测试意图——发表一旦生效（此处按钮消失），绝不允许二次点击。
         page = FakePublishPage()
-        with self.assertRaisesRegex(RuntimeError, "禁止重复点击"):
+        with patch("uploader.tencent_uploader.main.asyncio.sleep", new=AsyncMock()):
             await self.make_uploader().submit_publish(page)
         self.assertEqual(page.publish_clicks, 1)
-        self.assertEqual(page.navigation_attempts, 1)
 
     async def test_thumbnail_failure_is_not_downgraded_to_skip(self):
         uploader = self.make_uploader()

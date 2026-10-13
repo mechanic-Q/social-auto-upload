@@ -78,6 +78,84 @@ def _build_launch_kwargs(headless: bool) -> dict:
     return launch_kwargs
 
 
+def _resolve_persistent_profile_dir(account_file: str | Path) -> str:
+    account_path = Path(_resolve_account_file(account_file))
+    account_name = account_path.stem.removeprefix("tencent_") or "default"
+    return str((Path(BASE_DIR) / "cookies" / "tencent_profiles" / account_name).resolve())
+
+
+def _has_persistent_profile(account_file: str | Path) -> bool:
+    """持久 profile 已废弃（2026-09-15 实证）：
+    profile 存在时会遮蔽 tencent_<账号>.json 的 cookie 更新——CDP 重导后
+    check 仍读旧 session 导致「导了新 cookie 却判失效」。cookie 单一事实源 =
+    cookies/tencent_<账号>.json + .ua 侧车，恒走 storage_state 路径。
+    保留函数只为兼容旧调用点，恒返回 False。"""
+    return False
+
+
+def _load_session_ua(account_file: str | Path) -> str | None:
+    """会话绑 UA（2026-09-12）：真实浏览器扫码登录的 session 校验 UA，
+    侧车文件 cookies/tencent_<账号>.ua 存在则注入 context user_agent。"""
+    ua_path = Path(_resolve_account_file(account_file)).with_suffix(".ua")
+    try:
+        if ua_path.exists():
+            ua = ua_path.read_text(encoding="utf-8").strip()
+            return ua or None
+    except Exception:
+        pass
+    return None
+
+
+def _has_tencent_login_state(account_file: str | Path) -> bool:
+    """本地是否已有可尝试的视频号登录态（cookie json 或旧持久 profile）。"""
+    account_file = _resolve_account_file(account_file)
+    return Path(account_file).exists() or _has_persistent_profile(account_file)
+
+
+async def _launch_tencent_context(
+    playwright: Playwright,
+    account_file: str | Path,
+    headless: bool,
+    storage_state: bool = True,
+    persistent: bool | None = None,
+):
+    """统一 context 入口：persistent profile 判定 + 会话 UA 注入 + storage_state 路径。
+
+    返回 (context, browser)；persistent 分支 browser 为 None（context 自持生命周期），
+    其余分支由调用方负责依次关闭 context 与 browser。"""
+    account_file = _resolve_account_file(account_file)
+    if persistent is None:
+        persistent = _has_persistent_profile(account_file)
+
+    if persistent:
+        profile_dir = Path(_resolve_persistent_profile_dir(account_file))
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        launch_kwargs = _build_launch_kwargs(headless=headless)
+        ua = _load_session_ua(account_file)
+        if ua:
+            launch_kwargs["user_agent"] = ua
+        context = await playwright.chromium.launch_persistent_context(
+            str(profile_dir),
+            **launch_kwargs,
+        )
+        return context, None
+
+    browser = await playwright.chromium.launch(**_build_launch_kwargs(headless=headless))
+    try:
+        if storage_state:
+            ctx_kwargs = {"storage_state": account_file}
+            ua = _load_session_ua(account_file)
+            if ua:
+                ctx_kwargs["user_agent"] = ua
+            context = await browser.new_context(**ctx_kwargs)
+        else:
+            context = await browser.new_context()
+        return context, browser
+    except Exception:
+        await browser.close()
+        raise
+
+
 def _get_qrcode_utils():
     from utils.login_qrcode import build_login_qrcode_path
     from utils.login_qrcode import decode_qrcode_from_path
@@ -114,9 +192,10 @@ def format_str_for_short_title(origin_title: str) -> str:
 async def cookie_auth(account_file):
     account_file = _resolve_account_file(account_file)
     async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(**_build_launch_kwargs(headless=True))
+        context = None
+        browser = None
         try:
-            context = await browser.new_context(storage_state=account_file)
+            context, browser = await _launch_tencent_context(playwright, account_file, headless=True)
             context = await set_init_script(context)
             page = await context.new_page()
             await page.goto(TENCENT_UPLOAD_URL, wait_until="domcontentloaded")
@@ -142,7 +221,10 @@ async def cookie_auth(account_file):
             tencent_logger.warning(_msg("😵", f"cookie 校验时出错，按失效处理: {exc}"))
             return False
         finally:
-            await browser.close()
+            if context:
+                await context.close()
+            if browser:
+                await browser.close()
 
 
 async def _extract_tencent_qrcode_src(page: Page) -> str:
@@ -1029,17 +1111,56 @@ class TencentVideo(TencentBaseUploader):
             tencent_logger.warning(_msg("😵", f"封面裁剪确认时出错，小人继续尝试保存主弹窗: {exc}"))
 
     async def upload_thumbnail_in_dialog(self, page: Page, cover_dialog, thumbnail_path: str) -> None:
+        """弹窗内上传封面（本地加固版语义）：
+        确认按钮缺失必须显式报错（拒绝盲点提交）；确认后必须等编辑弹窗真正关闭，
+        弹窗未关闭说明确认未生效，继续发布会把未更新的封面直接发出去。"""
         await cover_dialog.wait_for(state="visible", timeout=5000)
         file_input = cover_dialog.locator('.single-cover-uploader-wrap input[type="file"]').first
         await file_input.wait_for(state="attached", timeout=10000)
         await file_input.set_input_files(thumbnail_path)
-        await page.wait_for_timeout(2000)
+        await page.wait_for_timeout(3000)
 
         confirm_button = cover_dialog.locator(
             'div.weui-desktop-dialog__ft button.weui-desktop-btn_primary:has-text("确认")'
         ).first
+        if not await confirm_button.count():
+            raise RuntimeError("未找到可见的封面确认按钮，拒绝盲点提交")
         await confirm_button.wait_for(state="visible", timeout=10000)
         await confirm_button.click()
+
+        try:
+            await cover_dialog.wait_for(state="hidden", timeout=10000)
+        except Exception as exc:
+            raise RuntimeError("封面确认后编辑弹窗未关闭，拒绝继续发布") from exc
+
+    async def _cover_preview_fingerprint(self, page: Page, selectors: list[str]) -> str | None:
+        """读取封面入口的预览指纹（src/poster/背景图/canvas 拼接），
+        用于核验「上传的封面真的反映到预览上了」，只认 cover-wrap 类入口。"""
+        for selector in selectors:
+            if "cover-wrap" not in selector:
+                continue
+            entry = page.locator(selector).first
+            if not await entry.count():
+                continue
+            fingerprint = await entry.evaluate("""
+                el => {
+                    const media = [];
+                    for (const node of [el, ...el.querySelectorAll('*')]) {
+                        if (node.currentSrc) media.push(`src:${node.currentSrc}`);
+                        else if (node.src) media.push(`src:${node.src}`);
+                        if (node.poster) media.push(`poster:${node.poster}`);
+                        const bg = getComputedStyle(node).backgroundImage;
+                        if (bg && bg !== 'none') media.push(`bg:${bg}`);
+                        if (node.tagName === 'CANVAS') {
+                            try { media.push(`canvas:${node.toDataURL()}`); } catch (_) {}
+                        }
+                    }
+                    return JSON.stringify(media);
+                }
+            """)
+            if fingerprint and fingerprint != "[]":
+                return fingerprint
+        return None
 
     async def set_single_thumbnail(
         self,
@@ -1049,21 +1170,36 @@ class TencentVideo(TencentBaseUploader):
         dialog_titles: list[str],
         label: str,
     ) -> None:
+        """单封面设置（本地核验语义，2026-09 实证）：
+        「封面已经设置完成」日志 ≠ 平台侧封面生效，必须前后指纹比对；
+        弹窗缺失/指纹未变化都直接中止发布，绝不静默跳过。"""
+        before = await self._cover_preview_fingerprint(page, selectors)
+        if not before:
+            raise RuntimeError(f"无法读取{label}封面预览，拒绝无验证发布")
+
         cover_dialog = await self.open_thumbnail_dialog(page, selectors, dialog_titles)
         if not cover_dialog:
-            tencent_logger.info(_msg("🧍", f"当前页面没有出现{label}封面编辑弹窗，小人先跳过"))
-            return
+            raise RuntimeError(f"当前页面没有出现{label}封面编辑弹窗")
 
-        try:
-            await self.upload_thumbnail_in_dialog(page, cover_dialog, thumbnail_path)
-            tencent_logger.success(_msg("🥳", f"{label}封面已经设置完成"))
-        except Exception as exc:
-            tencent_logger.warning(_msg("😵", f"{label}封面设置失败，这次先跳过: {exc}"))
+        await self.upload_thumbnail_in_dialog(page, cover_dialog, thumbnail_path)
+        for _ in range(20):
+            after = await self._cover_preview_fingerprint(page, selectors)
+            if after and after != before:
+                break
+            await page.wait_for_timeout(500)
+        else:
+            raise RuntimeError(f"{label}封面预览未更新，拒绝继续发布")
+        tencent_logger.success(_msg("🥳", f"{label}封面已经设置完成"))
 
     async def set_thumbnail(self, page: Page) -> None:
         if not self.thumbnail_landscape_path and not self.thumbnail_portrait_path:
             return
 
+        # 先清理残留遮罩/弹窗（分享卡片示例、历史弹窗壳），否则封面入口被挡住点不到
+        # （本地实证：.weui-desktop-dialog__wrp 残壳会让后续编辑器点选全部落空）
+        await page.evaluate(
+            "() => document.querySelectorAll('.share-card,.form-item.flex-start,.weui-desktop-dialog__wrp').forEach(e => e.remove())"
+        )
         tencent_logger.info(_msg("🖼️", "小人准备设置封面"))
 
         landscape_selectors = [
@@ -1108,8 +1244,11 @@ class TencentVideo(TencentBaseUploader):
         await self.validate_upload_args()
         tencent_logger.info(_msg("🥳", "上传前检查通过"))
 
-        browser = await playwright.chromium.launch(**_build_launch_kwargs(headless=self.headless))
-        context = await browser.new_context(storage_state=self.account_file)
+        context, browser = await _launch_tencent_context(
+            playwright,
+            self.account_file,
+            headless=self.headless,
+        )
 
         try:
             page = await context.new_page()
@@ -1214,8 +1353,11 @@ class TencentNote(TencentBaseUploader):
         await self.validate_upload_args()
         tencent_logger.info(_msg("🥳", "图文上传前检查通过"))
 
-        browser = await playwright.chromium.launch(**_build_launch_kwargs(headless=self.headless))
-        context = await browser.new_context(storage_state=self.account_file)
+        context, browser = await _launch_tencent_context(
+            playwright,
+            self.account_file,
+            headless=self.headless,
+        )
         context = await set_init_script(context)
 
         try:

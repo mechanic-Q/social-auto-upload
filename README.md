@@ -6,6 +6,27 @@
 
 <img src="media/show/tkupload.gif" alt="tiktok show" width="800"/>
 
+## 📊 创作者数据中台（collector）
+
+发布之外，本项目内置多平台运营数据采集：复用发布通道的登录态，自动抓取各平台创作者后台的**本人账号**作品数据，落成时序快照库，支持问数与每日日报。设计决策与实施状态见 `docs/data-collector-plan.md` 与 `docs/adr/0002`。
+
+```bash
+# 手动采集
+sau stats collect --full --only bilibili   # 全量（B站走API，抖音/小红书走浏览器）
+sau stats collect --incremental            # 消费到期发布事件（发布后30-90分钟自动排程）
+
+# 问数
+sau stats status                           # 数据库位置、账号、最近采集健康度
+sau stats list --only douyin --limit 10    # 作品跨平台表现
+sau stats trend --only bilibili --external-id BV1xx411c7mD   # 单作品增长曲线
+```
+
+- **数据位置**：`E:\social_data\`（`data.db` 快照库 + `raw\` 原始响应存档 + `exports\daily\` 每日日报）。WSL 内经 `/mnt/e/social_data` 访问；只能由采集进程单线程写库（ADR-0002）。
+- **自动调度**：`bash scripts/register_collector_tasks.sh` 注册 Windows 任务计划——每日 09:30 全量（未开机则开机补跑）+ 09:00-23:00 每 30 分钟增量消费。发布成功后钩子自动写发布事件，延迟 30 分钟以上触发对应平台增量采集。
+- **口径**：跨平台指标统一为播放/点赞/评论/分享/收藏（映射表在 `collector/normalize.py`，报告保留平台原生口径说明）。
+- **平台进度**：B站（API，124 作品）、抖音（创作者中心，40 作品）、快手（真机校准，10 作品）已上线；头条/视频号采集器已实现（probe-first，待真机网络面板校准候选键）；小红书采集器已实现，首次使用需 `sau xiaohongshu login` 后跑 `sau stats collect --probe --only xiaohongshu` 校准。
+- **跨系统聚合**：`sau stats crosswalk --output crosswalk.json` 导出 match_key 清单，供 daily-china published-track 按键聚合；详情级采集（完播率等）框架就绪，按「发布 7 天内 + Top N」控制补采量。
+
 ## 💎 赞助商
 
 <table width="100%">
@@ -75,14 +96,19 @@
 | 抖音 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 当前主线重构最完整 |
 | Bilibili | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | 运行时自动准备 `biliup` |
 | 小红书（浏览器版） | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 浏览器自动化，CLI/Skill 已接入 |
-| 快手 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 浏览器自动化，CLI/Skill 初版已接入 |
-| 视频号 | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ | 浏览器自动化，对应 `tencent_uploader` |
+| 快手 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 浏览器自动化，CLI/Skill 初版已接入；发布后封面存活核验+编辑页自动补传已内建（`_verify_and_refill_cover`） |
+| 视频号 | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ | 浏览器自动化，对应 `tencent_uploader`；cookie 走 Windows Chrome CDP 导出单一事实源（`_has_persistent_profile` 已废弃） |
 | 百家号 | ✅ | ✅ | ❌ | ❌ | ✅ | ❌ | 浏览器自动化 |
 | 支付宝生活号 | ✅ | ✅ | ❌ | ❌ | ✅ | ❌ | 浏览器自动化，支持生活号视频 |
 | 微博 | ✅ | ✅ | ❌ | ❌ | ✅ | ❌ | 浏览器自动化，标题最多 30 字 |
 | 虎扑 | ✅ | ✅ | ❌ | ❌ | ✅ | ❌ | 浏览器自动化，标题 4–40 字 |
 | TikTok | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ | 当前示例走 Chrome 版实现 |
 | YouTube | ✅ | ✅ | ❌ | ❌ | ✅ | ❌ | 浏览器自动化（Studio），支持加入播放列表/可见性 |
+
+### 视频号 cookie 与快手封面运维定稿（2026-09-15）
+
+- **视频号 cookie 刷新**：Windows Chrome（`--remote-debugging-port=9222`）登录视频号后台 → `bash video-pipeline/scripts/tencent_refresh_cookie.sh <账号> --launch` 一键 CDP 导出+写入+校验。禁用 `sau tencent login`（WSL 扫码二维码 2 分钟过期）。持久 profile 已废弃（会遮蔽 json 更新），cookie 单一事实源 = `cookies/tencent_<账号>.json` + `.ua` 侧车。
+- **快手封面三层防线**：①发布后 90s 自动核验缩略图哈希（阈值 200），疑似丢失自动编辑页补传一次；②存量核查 `python3 tools_ks_cover_audit.py --limit 20 --ref <封面.png>`；③人工兜底链路见 `docs/CLI.md`（编辑页「发布」div 提交，`edit/submit` POST 为成功标志）。
 
 ### AI这么强，为什么还需要这个项目
 在你使用AI的能力，browser agent等等，每次都让 agent 重新解析网页、截图理解, 临场判断
