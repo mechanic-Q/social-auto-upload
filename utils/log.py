@@ -58,4 +58,14 @@ kuaishou_logger = create_logger('kuaishou', 'logs/kuaishou.log')
 baijiahao_logger = create_logger('baijiahao', 'logs/baijiahao.log')
 xiaohongshu_logger = create_logger('xiaohongshu', 'logs/xiaohongshu.log')
 youtube_logger = create_logger('youtube', 'logs/youtube.log')
-toutiao_logger = create_logger('toutiao', 'logs/toutiao.log')
+alipay_logger = create_logger('alipay', 'logs/alipay.log')
+weibo_logger = create_logger('weibo', 'logs/weibo.log')
+hupu_logger = create_logger('hupu', 'logs/hupu.log')
+
+# ── 本地域票并集（2026-10-12 merge 基线）：上游新增平台 logger 之外，
+# 补齐本地 collector/toutiao/douyin/tencent 依赖的 logger 定义（缺则 ImportError）
+douyin_logger = create_logger("douyin", "logs/douyin.log")
+tencent_logger = create_logger("tencent", "logs/tencent.log")
+xhs_logger = create_logger("xhs", "logs/xhs.log")
+tiktok_logger = create_logger("tiktok", "logs/tiktok.log")
+toutiao_logger = create_logger("toutiao", "logs/toutiao.log")

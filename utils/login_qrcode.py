@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 
 import cv2
+import numpy as np
 import segno
 
 
@@ -35,7 +36,16 @@ def remove_qrcode_file(qrcode_path: Path | None) -> bool:
 
 
 def decode_qrcode_from_path(qrcode_path: Path) -> str | None:
-    image = cv2.imread(str(qrcode_path))
+    # Windows 下 cv2.imread 对中文路径不稳定，优先走 numpy+imdecode
+    image = None
+    try:
+        data = np.fromfile(str(qrcode_path), dtype=np.uint8)
+        if data.size > 0:
+            image = cv2.imdecode(data, cv2.IMREAD_COLOR)
+    except Exception:
+        image = None
+    if image is None:
+        image = cv2.imread(str(qrcode_path))
     if image is None:
         return None
 

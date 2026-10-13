@@ -8,9 +8,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from conf import BASE_DIR, XIAOHONGSHU_ENABLED
-from utils.extra_tags import merge_tags, resolve_extra_tags
-from uploader.bilibili_uploader.health import bilibili_health
+from conf import BASE_DIR
+from uploader.baijiahao_uploader.main import (
+    BaiJiaHaoVideo,
+    baijiahao_setup,
+    cookie_auth as baijiahao_cookie_auth,
+)
+from uploader.alipay_uploader.main import (
+    AlipayVideo,
+    alipay_setup,
+    cookie_auth as alipay_cookie_auth,
+)
 from uploader.bilibili_uploader.runtime import run_biliup_command
 from uploader.douyin_uploader.main import (
     DOUYIN_PUBLISH_STRATEGY_IMMEDIATE,
@@ -20,7 +28,6 @@ from uploader.douyin_uploader.main import (
     cookie_auth as douyin_cookie_auth,
     douyin_setup,
 )
-from uploader.douyin_uploader.health import douyin_health
 from uploader.ks_uploader.main import (
     KUAISHOU_PUBLISH_STRATEGY_IMMEDIATE,
     KUAISHOU_PUBLISH_STRATEGY_SCHEDULED,
@@ -28,23 +35,23 @@ from uploader.ks_uploader.main import (
     KSVideo,
     cookie_auth as kuaishou_cookie_auth,
     ks_setup,
-    list_kuaishou_activities,
 )
 from uploader.tencent_uploader.main import (
     TENCENT_PUBLISH_STRATEGY_IMMEDIATE,
     TENCENT_PUBLISH_STRATEGY_SCHEDULED,
     TencentVideo,
     cookie_auth as tencent_cookie_auth,
-    _has_tencent_login_state,
     tencent_setup,
 )
-from uploader.toutiao_uploader.main import (
-    TOUTIAO_PUBLISH_STRATEGY_IMMEDIATE,
-    TOUTIAO_PUBLISH_STRATEGY_SCHEDULED,
-    ToutiaoVideo,
-    cookie_auth as toutiao_cookie_auth,
-    list_toutiao_activities,
-    toutiao_setup,
+from uploader.weibo_uploader.main import (
+    WeiBoVideo,
+    weibo_setup,
+    cookie_auth as weibo_cookie_auth,
+)
+from uploader.hupu_uploader.main import (
+    HuPuVideo,
+    hupu_setup,
+    cookie_auth as hupu_cookie_auth,
 )
 from uploader.xiaohongshu_uploader.main import (
     XIAOHONGSHU_PUBLISH_STRATEGY_IMMEDIATE,
@@ -76,10 +83,11 @@ class DouyinVideoUploadRequest:
     thumbnail_portrait_file: Path | None = None
     product_link: str = ""
     product_title: str = ""
-    declaration: str | None = None
     publish_strategy: str = DOUYIN_PUBLISH_STRATEGY_IMMEDIATE
     debug: bool = True
     headless: bool = True
+    declaration: str | None = None
+    collection_name: str | None = None
 
 
 @dataclass(slots=True)
@@ -105,10 +113,10 @@ class KuaishouVideoUploadRequest:
     tags: list[str]
     publish_date: datetime | int
     thumbnail_file: Path | None = None
-    activity: str | None = None
     publish_strategy: str = KUAISHOU_PUBLISH_STRATEGY_IMMEDIATE
     debug: bool = True
     headless: bool = True
+    collection_name: str | None = None
 
 
 @dataclass(slots=True)
@@ -119,25 +127,7 @@ class KuaishouNoteUploadRequest:
     note: str
     tags: list[str]
     publish_date: datetime | int
-    activity: str | None = None
     publish_strategy: str = KUAISHOU_PUBLISH_STRATEGY_IMMEDIATE
-    debug: bool = True
-    headless: bool = True
-
-
-@dataclass(slots=True)
-class ToutiaoVideoUploadRequest:
-    account_name: str
-    video_file: Path
-    title: str
-    description: str
-    tags: list[str]
-    publish_date: datetime | int
-    thumbnail_file: Path | None = None
-    activity: str | None = None
-    declaration: str | None = None
-    draft: bool = False
-    publish_strategy: str = TOUTIAO_PUBLISH_STRATEGY_IMMEDIATE
     debug: bool = True
     headless: bool = True
 
@@ -196,6 +186,58 @@ class TencentVideoUploadRequest:
     category: str | None = None
     is_draft: bool = False
     publish_strategy: str = TENCENT_PUBLISH_STRATEGY_IMMEDIATE
+    debug: bool = True
+    headless: bool = True
+    collection_name: str | None = None
+
+
+@dataclass(slots=True)
+class BaijiahaoVideoUploadRequest:
+    account_name: str
+    video_file: Path
+    title: str
+    description: str
+    tags: list[str]
+    thumbnail_file: Path | None = None
+    collection_name: str | None = None
+    debug: bool = True
+    headless: bool = True
+
+
+@dataclass(slots=True)
+class AlipayVideoUploadRequest:
+    account_name: str
+    video_file: Path
+    title: str
+    description: str
+    tags: list[str]
+    thumbnail_file: Path | None = None
+    collection_name: str | None = None
+    debug: bool = True
+    headless: bool = True
+
+
+@dataclass(slots=True)
+class WeiboVideoUploadRequest:
+    account_name: str
+    video_file: Path
+    title: str
+    description: str
+    tags: list[str]
+    thumbnail_file: Path | None = None
+    collection_name: str | None = None
+    debug: bool = True
+    headless: bool = True
+
+
+@dataclass(slots=True)
+class HupuVideoUploadRequest:
+    account_name: str
+    video_file: Path
+    title: str
+    description: str
+    tags: list[str]
+    thumbnail_file: Path | None = None
     debug: bool = True
     headless: bool = True
 
@@ -274,32 +316,6 @@ async def check_kuaishou_account(account_name: str) -> bool:
     return await kuaishou_cookie_auth(str(account_file))
 
 
-async def login_toutiao_account(account_name: str, headless: bool = True) -> dict:
-    account_file = resolve_account_file("toutiao", account_name)
-    return await toutiao_setup(str(account_file), handle=True, return_detail=True, headless=headless)
-
-
-async def check_toutiao_account(account_name: str) -> bool:
-    account_file = resolve_account_file("toutiao", account_name)
-    if not account_file.exists():
-        return False
-    return await toutiao_cookie_auth(str(account_file))
-
-
-async def health_douyin_account(account_name: str, limit: int, headless: bool) -> dict:
-    account_file = resolve_account_file("douyin", account_name)
-    if not account_file.exists():
-        raise RuntimeError(f"cookie 文件不存在，请先 `sau douyin login --account {account_name}`")
-    return await douyin_health(str(account_file), limit=limit, headless=headless)
-
-
-async def health_bilibili_account(account_name: str, limit: int) -> dict:
-    account_file = resolve_account_file("bilibili", account_name)
-    if not account_file.exists():
-        raise RuntimeError(f"cookie 文件不存在，请先 `sau bilibili login --account {account_name}`")
-    return bilibili_health(str(account_file), limit=limit)
-
-
 async def login_xiaohongshu_account(account_name: str, headless: bool = True) -> dict:
     account_file = resolve_account_file("xiaohongshu", account_name)
     return await xiaohongshu_setup(str(account_file), handle=True, return_detail=True, headless=headless)
@@ -349,9 +365,9 @@ async def login_tencent_account(account_name: str, headless: bool = True) -> dic
 
 async def check_tencent_account(account_name: str) -> bool:
     account_file = resolve_account_file("tencent", account_name)
-    if not _has_tencent_login_state(str(account_file)):
+    if not account_file.exists():
         return False
-    return await tencent_cookie_auth(str(account_file), headless=False)
+    return await tencent_cookie_auth(str(account_file))
 
 
 async def login_youtube_account(account_name: str, headless: bool = False) -> dict:
@@ -417,6 +433,7 @@ async def upload_video(request: DouyinVideoUploadRequest) -> Path:
         publish_strategy=request.publish_strategy,
         debug=request.debug,
         headless=request.headless,
+        collection_name=request.collection_name,
     )
     await app.douyin_upload_video()
     return account_file
@@ -462,10 +479,10 @@ async def upload_kuaishou_video(request: KuaishouVideoUploadRequest) -> Path:
         publish_date=request.publish_date,
         account_file=str(account_file),
         thumbnail_path=str(request.thumbnail_file) if request.thumbnail_file else None,
-        activity=request.activity,
         publish_strategy=request.publish_strategy,
         debug=request.debug,
         headless=request.headless,
+        collection_name=request.collection_name,
     )
     await app.main()
     return account_file
@@ -486,34 +503,6 @@ async def upload_kuaishou_note(request: KuaishouNoteUploadRequest) -> Path:
         tags=request.tags,
         publish_date=request.publish_date,
         account_file=str(account_file),
-        activity=request.activity,
-        publish_strategy=request.publish_strategy,
-        debug=request.debug,
-        headless=request.headless,
-    )
-    await app.main()
-    return account_file
-
-
-async def upload_toutiao_video(request: ToutiaoVideoUploadRequest) -> Path:
-    account_file = resolve_account_file("toutiao", request.account_name)
-    is_ready = await toutiao_setup(str(account_file), handle=False)
-    if not is_ready:
-        raise RuntimeError(
-            f"Toutiao cookie is missing or expired: {account_file}. Run `sau toutiao login --account {request.account_name}` first."
-        )
-
-    app = ToutiaoVideo(
-        title=request.title,
-        file_path=str(request.video_file),
-        tags=request.tags,
-        publish_date=request.publish_date,
-        account_file=str(account_file),
-        thumbnail_path=str(request.thumbnail_file) if request.thumbnail_file else None,
-        desc=request.description,
-        activity=request.activity,
-        declaration=request.declaration,
-        draft=request.draft,
         publish_strategy=request.publish_strategy,
         debug=request.debug,
         headless=request.headless,
@@ -591,23 +580,20 @@ async def upload_bilibili_video(request: BilibiliVideoUploadRequest) -> Path:
     ]
     if request.tags:
         arguments.extend(["--tag", ",".join(request.tags)])
+    if request.thumbnail_file:
+        arguments.extend(["--cover", str(request.thumbnail_file)])
     if isinstance(request.publish_date, datetime):
         arguments.extend(["--dtime", str(int(request.publish_date.timestamp()))])
-    if request.thumbnail_file is not None:
-        arguments.extend(["--cover", str(request.thumbnail_file)])
 
     result = run_biliup_command(arguments)
     if result.returncode != 0:
         raise RuntimeError((result.stderr or result.stdout or "").strip() or "Bilibili upload failed")
-    from collector.events import safe_append_publish_event
-
-    safe_append_publish_event("bilibili", account_file, request.title)
     return account_file
 
 
 async def upload_tencent_video(request: TencentVideoUploadRequest) -> Path:
     account_file = resolve_account_file("tencent", request.account_name)
-    is_ready = await tencent_setup(str(account_file), handle=False, headless=request.headless)
+    is_ready = await tencent_setup(str(account_file), handle=False)
     if not is_ready:
         raise RuntimeError(
             f"Tencent/WeChat Channels cookie is missing or expired: {account_file}. "
@@ -634,8 +620,148 @@ async def upload_tencent_video(request: TencentVideoUploadRequest) -> Path:
         publish_strategy=request.publish_strategy,
         debug=request.debug,
         headless=request.headless,
+        collection_name=request.collection_name,
     )
     await app.tencent_upload_video()
+    return account_file
+
+
+async def login_baijiahao_account(account_name: str, headless: bool = True, qrcode_callback=None) -> dict:
+    account_file = resolve_account_file("baijiahao", account_name)
+    return await baijiahao_setup(str(account_file), handle=True, return_detail=True, headless=headless, qrcode_callback=qrcode_callback)
+
+
+async def check_baijiahao_account(account_name: str) -> bool:
+    account_file = resolve_account_file("baijiahao", account_name)
+    if not account_file.exists():
+        return False
+    return await baijiahao_cookie_auth(str(account_file))
+
+
+async def upload_baijiahao_video(request: BaijiahaoVideoUploadRequest) -> Path:
+    account_file = resolve_account_file("baijiahao", request.account_name)
+    is_ready = await baijiahao_setup(str(account_file), handle=False)
+    if not is_ready:
+        raise RuntimeError(
+            f"Baijiahao cookie is missing or expired: {account_file}. Run `sau baijiahao login --account {request.account_name}` first."
+        )
+
+    app = BaiJiaHaoVideo(
+        title=request.title,
+        file_path=str(request.video_file),
+        tags=request.tags,
+        account_file=str(account_file),
+        desc=request.description,
+        thumbnail_path=str(request.thumbnail_file) if request.thumbnail_file else None,
+        collection_name=request.collection_name,
+        debug=request.debug,
+        headless=request.headless,
+    )
+    await app.main()
+    return account_file
+
+
+async def login_alipay_account(account_name: str, headless: bool = True, qrcode_callback=None) -> dict:
+    account_file = resolve_account_file("alipay", account_name)
+    return await alipay_setup(str(account_file), handle=True, return_detail=True, headless=headless, qrcode_callback=qrcode_callback)
+
+
+async def check_alipay_account(account_name: str) -> bool:
+    account_file = resolve_account_file("alipay", account_name)
+    if not account_file.exists():
+        return False
+    return await alipay_cookie_auth(str(account_file))
+
+
+async def upload_alipay_video(request: AlipayVideoUploadRequest) -> Path:
+    account_file = resolve_account_file("alipay", request.account_name)
+    is_ready = await alipay_setup(str(account_file), handle=False)
+    if not is_ready:
+        raise RuntimeError(
+            f"Alipay cookie is missing or expired: {account_file}. Run `sau alipay login --account {request.account_name}` first."
+        )
+
+    app = AlipayVideo(
+        title=request.title,
+        file_path=str(request.video_file),
+        tags=request.tags,
+        account_file=str(account_file),
+        desc=request.description,
+        thumbnail_path=str(request.thumbnail_file) if request.thumbnail_file else None,
+        collection_name=request.collection_name,
+        debug=request.debug,
+        headless=request.headless,
+    )
+    await app.main()
+    return account_file
+
+
+async def login_weibo_account(account_name: str, headless: bool = True, qrcode_callback=None) -> dict:
+    account_file = resolve_account_file("weibo", account_name)
+    return await weibo_setup(str(account_file), handle=True, return_detail=True, headless=headless, qrcode_callback=qrcode_callback)
+
+
+async def check_weibo_account(account_name: str) -> bool:
+    account_file = resolve_account_file("weibo", account_name)
+    if not account_file.exists():
+        return False
+    return await weibo_cookie_auth(str(account_file))
+
+
+async def upload_weibo_video(request: WeiboVideoUploadRequest) -> Path:
+    account_file = resolve_account_file("weibo", request.account_name)
+    is_ready = await weibo_setup(str(account_file), handle=False)
+    if not is_ready:
+        raise RuntimeError(
+            f"Weibo cookie is missing or expired: {account_file}. Run `sau weibo login --account {request.account_name}` first."
+        )
+
+    app = WeiBoVideo(
+        title=request.title,
+        file_path=str(request.video_file),
+        tags=request.tags,
+        account_file=str(account_file),
+        desc=request.description,
+        thumbnail_path=str(request.thumbnail_file) if request.thumbnail_file else None,
+        collection_name=request.collection_name,
+        debug=request.debug,
+        headless=request.headless,
+    )
+    await app.main()
+    return account_file
+
+
+async def login_hupu_account(account_name: str, headless: bool = False, qrcode_callback=None) -> dict:
+    account_file = resolve_account_file("hupu", account_name)
+    return await hupu_setup(str(account_file), handle=True, return_detail=True, headless=headless, qrcode_callback=qrcode_callback)
+
+
+async def check_hupu_account(account_name: str) -> bool:
+    account_file = resolve_account_file("hupu", account_name)
+    if not account_file.exists():
+        return False
+    return await hupu_cookie_auth(str(account_file))
+
+
+async def upload_hupu_video(request: HupuVideoUploadRequest) -> Path:
+    account_file = resolve_account_file("hupu", request.account_name)
+    is_ready = await hupu_setup(str(account_file), handle=False)
+    if not is_ready:
+        raise RuntimeError(
+            f"Hupu cookie is missing or expired: {account_file}. Run `sau hupu login --account {request.account_name}` first."
+        )
+
+    app = HuPuVideo(
+        title=request.title,
+        file_path=str(request.video_file),
+        tags=request.tags,
+        account_file=str(account_file),
+        desc=request.description,
+        thumbnail_path=str(request.thumbnail_file) if request.thumbnail_file else None,
+        debug=request.debug,
+        headless=request.headless,
+    )
+    await app.main()
     return account_file
 
 
@@ -680,13 +806,6 @@ def build_parser() -> argparse.ArgumentParser:
         if action_name == "login":
             add_runtime_flags(action_parser)
 
-    douyin_health_parser = douyin_actions.add_parser(
-        "health", help="Read-only account health check: punishment status, per-work status flags and stats (JSON)"
-    )
-    douyin_health_parser.add_argument("--account", required=True, help="Douyin user-defined account_name")
-    douyin_health_parser.add_argument("--limit", type=int, default=30, help="Max works to inspect (default 30)")
-    add_runtime_flags(douyin_health_parser)
-
     upload_video_parser = douyin_actions.add_parser("upload-video", help="Upload one video to Douyin")
     upload_video_parser.add_argument("--account", required=True, help="Douyin user-defined account_name")
     upload_video_parser.add_argument("--file", required=True, type=existing_file_path, help="Video file path")
@@ -703,7 +822,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--declaration",
         help="Exact Douyin self-declaration option text; omitted means do not set one",
     )
-    upload_video_parser.add_argument("--bgm", default="", help="BGM music name to search and select")
+    upload_video_parser.add_argument("--collection", default=None, help="Optional collection name to add the work into (must already exist)")
     add_runtime_flags(upload_video_parser)
 
     upload_note_parser = douyin_actions.add_parser("upload-note", help="Upload one note to Douyin")
@@ -732,17 +851,10 @@ def build_parser() -> argparse.ArgumentParser:
     kuaishou_upload_video_parser.add_argument("--title", required=True, help="Video title")
     kuaishou_upload_video_parser.add_argument("--desc", default="", help="Optional video description")
     kuaishou_upload_video_parser.add_argument("--tags", default="", help="Comma-separated tags, such as tag1,tag2")
-    kuaishou_upload_video_parser.add_argument("--extra-tag-pool", action="append", default=[], help="Extra tag pool name in conf.PLATFORM_EXTRA_TAG_POOLS to append (repeatable)")
     kuaishou_upload_video_parser.add_argument("--schedule", type=schedule_value, help=f"Schedule time in {schedule_help}")
     kuaishou_upload_video_parser.add_argument("--thumbnail", type=existing_file_path, help="Optional thumbnail path")
-    kuaishou_upload_video_parser.add_argument("--activity", help="Exact Kuaishou activity name to join; use list-activities to discover")
+    kuaishou_upload_video_parser.add_argument("--collection", default=None, help="Optional collection name to add the work into (must already exist)")
     add_runtime_flags(kuaishou_upload_video_parser)
-
-    kuaishou_list_activities_parser = kuaishou_actions.add_parser(
-        "list-activities", help="List joinable Kuaishou creation activities (JSON)"
-    )
-    kuaishou_list_activities_parser.add_argument("--account", required=True, help="Kuaishou user-defined account_name")
-    add_runtime_flags(kuaishou_list_activities_parser)
 
     kuaishou_upload_note_parser = kuaishou_actions.add_parser("upload-note", help="Upload one note to Kuaishou")
     kuaishou_upload_note_parser.add_argument("--account", required=True, help="Kuaishou user-defined account_name")
@@ -750,9 +862,7 @@ def build_parser() -> argparse.ArgumentParser:
     kuaishou_upload_note_parser.add_argument("--title", required=True, help="Note title")
     kuaishou_upload_note_parser.add_argument("--note", default="", help="Optional note content")
     kuaishou_upload_note_parser.add_argument("--tags", default="", help="Comma-separated tags, such as tag1,tag2")
-    kuaishou_upload_note_parser.add_argument("--extra-tag-pool", action="append", default=[], help="Extra tag pool name in conf.PLATFORM_EXTRA_TAG_POOLS to append (repeatable)")
     kuaishou_upload_note_parser.add_argument("--schedule", type=schedule_value, help=f"Schedule time in {schedule_help}")
-    kuaishou_upload_note_parser.add_argument("--activity", help="Exact Kuaishou activity name to join; use list-activities to discover")
     add_runtime_flags(kuaishou_upload_note_parser)
 
     xiaohongshu_parser = platform_parsers.add_parser("xiaohongshu", help="Xiaohongshu operations")
@@ -790,12 +900,6 @@ def build_parser() -> argparse.ArgumentParser:
         action_parser = bilibili_actions.add_parser(action_name, help=f"Bilibili {action_name}")
         action_parser.add_argument("--account", required=True, help="Bilibili user-defined account_name")
 
-    bilibili_health_parser = bilibili_actions.add_parser(
-        "health", help="Read-only account health check: publish counts, per-work audit state and stats (JSON)"
-    )
-    bilibili_health_parser.add_argument("--account", required=True, help="Bilibili user-defined account_name")
-    bilibili_health_parser.add_argument("--limit", type=int, default=20, help="Max works to inspect (default 20)")
-
     bilibili_upload_video_parser = bilibili_actions.add_parser("upload-video", help="Upload one video to Bilibili")
     bilibili_upload_video_parser.add_argument("--account", required=True, help="Bilibili user-defined account_name")
     bilibili_upload_video_parser.add_argument("--file", required=True, type=existing_file_path, help="Video file path")
@@ -803,41 +907,8 @@ def build_parser() -> argparse.ArgumentParser:
     bilibili_upload_video_parser.add_argument("--desc", required=True, help="Video description")
     bilibili_upload_video_parser.add_argument("--tid", required=True, type=int, help="Bilibili category id")
     bilibili_upload_video_parser.add_argument("--tags", default="", help="Comma-separated tags, such as tag1,tag2")
-    bilibili_upload_video_parser.add_argument("--extra-tag-pool", action="append", default=[], help="Extra tag pool name in conf.PLATFORM_EXTRA_TAG_POOLS to append (repeatable)")
+    bilibili_upload_video_parser.add_argument("--thumbnail", type=existing_file_path, help="Optional Bilibili cover image path")
     bilibili_upload_video_parser.add_argument("--schedule", type=schedule_value, help=f"Schedule time in {schedule_help}")
-    bilibili_upload_video_parser.add_argument("--thumbnail", type=existing_file_path, help="Optional 16:9 cover image path")
-
-    toutiao_parser = platform_parsers.add_parser("toutiao", help="Toutiao (Jinri Toutiao) operations")
-    toutiao_actions = toutiao_parser.add_subparsers(dest="action", required=True)
-
-    for action_name in ("login", "check"):
-        action_parser = toutiao_actions.add_parser(action_name, help=f"Toutiao {action_name}")
-        action_parser.add_argument("--account", required=True, help="Toutiao user-defined account_name")
-        if action_name == "login":
-            add_runtime_flags(action_parser)
-
-    toutiao_upload_video_parser = toutiao_actions.add_parser("upload-video", help="Upload one video to Toutiao")
-    toutiao_upload_video_parser.add_argument("--account", required=True, help="Toutiao user-defined account_name")
-    toutiao_upload_video_parser.add_argument("--file", required=True, type=existing_file_path, help="Video file path")
-    toutiao_upload_video_parser.add_argument("--title", required=True, help="Video title (<=30 chars)")
-    toutiao_upload_video_parser.add_argument("--desc", default="", help="Optional video description")
-    toutiao_upload_video_parser.add_argument("--tags", default="", help="Comma-separated tags, such as tag1,tag2")
-    toutiao_upload_video_parser.add_argument("--extra-tag-pool", action="append", default=[], help="Extra tag pool name in conf.PLATFORM_EXTRA_TAG_POOLS to append (repeatable)")
-    toutiao_upload_video_parser.add_argument("--schedule", type=schedule_value, help=f"Schedule time in {schedule_help}")
-    toutiao_upload_video_parser.add_argument("--thumbnail", type=existing_file_path, help="Optional thumbnail image path")
-    toutiao_upload_video_parser.add_argument("--activity", help="Exact Toutiao activity name to join; use list-activities to discover")
-    toutiao_upload_video_parser.add_argument(
-        "--declaration",
-        help="Toutiao work declaration checkbox text (e.g. AI生成/自行拍摄/引用内容); omitted means do not set one; aborts publish on failure",
-    )
-    toutiao_upload_video_parser.add_argument("--draft", action="store_true", help="Save as draft instead of publishing")
-    add_runtime_flags(toutiao_upload_video_parser)
-
-    toutiao_list_activities_parser = toutiao_actions.add_parser(
-        "list-activities", help="List joinable Toutiao creation activities (JSON)"
-    )
-    toutiao_list_activities_parser.add_argument("--account", required=True, help="Toutiao user-defined account_name")
-    add_runtime_flags(toutiao_list_activities_parser)
 
     tencent_parser = platform_parsers.add_parser("tencent", help="Tencent/WeChat Channels operations")
     tencent_actions = tencent_parser.add_subparsers(dest="action", required=True)
@@ -861,7 +932,66 @@ def build_parser() -> argparse.ArgumentParser:
     tencent_upload_video_parser.add_argument("--short-title", help="Optional WeChat Channels short title")
     tencent_upload_video_parser.add_argument("--category", help="Optional original content category")
     tencent_upload_video_parser.add_argument("--draft", action="store_true", help="Save as draft instead of publishing")
+    tencent_upload_video_parser.add_argument("--collection", default=None, help="Optional collection name to add the work into (must already exist)")
     add_runtime_flags(tencent_upload_video_parser)
+
+    alipay_parser = platform_parsers.add_parser("alipay", help="Alipay life account operations")
+    alipay_actions = alipay_parser.add_subparsers(dest="action", required=True)
+
+    for action_name in ("login", "check"):
+        action_parser = alipay_actions.add_parser(action_name, help=f"Alipay {action_name}")
+        action_parser.add_argument("--account", required=True, help="Alipay user-defined account_name")
+        if action_name == "login":
+            add_runtime_flags(action_parser)
+
+    alipay_upload_video_parser = alipay_actions.add_parser("upload-video", help="Upload one video to Alipay")
+    alipay_upload_video_parser.add_argument("--account", required=True, help="Alipay user-defined account_name")
+    alipay_upload_video_parser.add_argument("--file", required=True, type=existing_file_path, help="Video file path")
+    alipay_upload_video_parser.add_argument("--title", required=True, help="Video title")
+    alipay_upload_video_parser.add_argument("--desc", default="", help="Optional video description")
+    alipay_upload_video_parser.add_argument("--tags", default="", help="Comma-separated tags, such as tag1,tag2")
+    alipay_upload_video_parser.add_argument("--thumbnail", type=existing_file_path, help="Optional cover image path")
+    alipay_upload_video_parser.add_argument("--collection", default=None, help="Optional collection name to add the work into (must already exist)")
+    add_runtime_flags(alipay_upload_video_parser)
+
+    # ── Weibo ──
+    weibo_parser = platform_parsers.add_parser("weibo", help="Sina Weibo operations")
+    weibo_actions = weibo_parser.add_subparsers(dest="action", required=True)
+
+    for action_name in ("login", "check"):
+        action_parser = weibo_actions.add_parser(action_name, help=f"Weibo {action_name}")
+        action_parser.add_argument("--account", required=True, help="Weibo user-defined account_name")
+        if action_name == "login":
+            add_runtime_flags(action_parser)
+
+    weibo_upload_video_parser = weibo_actions.add_parser("upload-video", help="Upload one video to Weibo")
+    weibo_upload_video_parser.add_argument("--account", required=True, help="Weibo user-defined account_name")
+    weibo_upload_video_parser.add_argument("--file", required=True, type=existing_file_path, help="Video file path")
+    weibo_upload_video_parser.add_argument("--title", required=True, help="Video title (max 30 chars)")
+    weibo_upload_video_parser.add_argument("--desc", default="", help="Optional video description")
+    weibo_upload_video_parser.add_argument("--tags", default="", help="Comma-separated tags, such as tag1,tag2")
+    weibo_upload_video_parser.add_argument("--thumbnail", type=existing_file_path, help="Optional cover image path (<5MB)")
+    weibo_upload_video_parser.add_argument("--collection", default=None, help="Optional collection name")
+    add_runtime_flags(weibo_upload_video_parser)
+
+    # ── Hupu ──
+    hupu_parser = platform_parsers.add_parser("hupu", help="Hupu (虎扑) operations")
+    hupu_actions = hupu_parser.add_subparsers(dest="action", required=True)
+
+    for action_name in ("login", "check"):
+        action_parser = hupu_actions.add_parser(action_name, help=f"Hupu {action_name}")
+        action_parser.add_argument("--account", required=True, help="Hupu user-defined account_name")
+        if action_name == "login":
+            add_runtime_flags(action_parser)
+
+    hupu_upload_video_parser = hupu_actions.add_parser("upload-video", help="Upload one video to Hupu")
+    hupu_upload_video_parser.add_argument("--account", required=True, help="Hupu user-defined account_name")
+    hupu_upload_video_parser.add_argument("--file", required=True, type=existing_file_path, help="Video file path")
+    hupu_upload_video_parser.add_argument("--title", required=True, help="Video title (4-40 chars)")
+    hupu_upload_video_parser.add_argument("--desc", default="", help="Optional video description")
+    hupu_upload_video_parser.add_argument("--tags", default="", help="Comma-separated tags, such as tag1,tag2")
+    hupu_upload_video_parser.add_argument("--thumbnail", type=existing_file_path, help="Optional cover image path")
+    add_runtime_flags(hupu_upload_video_parser)
 
     youtube_parser = platform_parsers.add_parser("youtube", help="YouTube operations")
     youtube_actions = youtube_parser.add_subparsers(dest="action", required=True)
@@ -884,19 +1014,29 @@ def build_parser() -> argparse.ArgumentParser:
         "--visibility", default="public", choices=["public", "unlisted", "private"], help="Video visibility")
     add_runtime_flags(youtube_upload_video_parser)
 
-    from collector.cli import register_stats_parser
+    baijiahao_parser = platform_parsers.add_parser("baijiahao", help="Baidu Baijiahao operations")
+    baijiahao_actions = baijiahao_parser.add_subparsers(dest="action", required=True)
 
-    register_stats_parser(platform_parsers)
+    for action_name in ("login", "check"):
+        action_parser = baijiahao_actions.add_parser(action_name, help=f"Baijiahao {action_name}")
+        action_parser.add_argument("--account", required=True, help="Baijiahao user-defined account_name")
+        if action_name == "login":
+            add_runtime_flags(action_parser)
+
+    baijiahao_upload_video_parser = baijiahao_actions.add_parser("upload-video", help="Upload one video to Baijiahao")
+    baijiahao_upload_video_parser.add_argument("--account", required=True, help="Baijiahao user-defined account_name")
+    baijiahao_upload_video_parser.add_argument("--file", required=True, type=existing_file_path, help="Video file path")
+    baijiahao_upload_video_parser.add_argument("--title", required=True, help="Video title")
+    baijiahao_upload_video_parser.add_argument("--desc", default="", help="Optional video description")
+    baijiahao_upload_video_parser.add_argument("--tags", default="", help="Comma-separated tags, such as tag1,tag2")
+    baijiahao_upload_video_parser.add_argument("--thumbnail", type=existing_file_path, help="Optional cover image path")
+    baijiahao_upload_video_parser.add_argument("--collection", default=None, help="Optional collection name")
+    add_runtime_flags(baijiahao_upload_video_parser)
+
     return parser
 
 
 async def dispatch(args: argparse.Namespace) -> int:
-    if args.platform == "stats":
-        from collector.cli import handle
-
-        # handle 内部会为新平台采集起自己的 event loop,挪到线程避免嵌套 asyncio.run
-        return await asyncio.to_thread(handle, args)
-
     if args.platform == "douyin":
         if args.action == "login":
             result = await login_douyin_account(args.account, headless=args.headless)
@@ -909,12 +1049,6 @@ async def dispatch(args: argparse.Namespace) -> int:
             is_valid = await check_douyin_account(args.account)
             print("valid" if is_valid else "invalid")
             return 0 if is_valid else 1
-
-        if args.action == "health":
-            import json as _json
-            report = await health_douyin_account(args.account, limit=args.limit, headless=args.headless)
-            print(_json.dumps(report, ensure_ascii=False, indent=2))
-            return 0
 
         publish_strategy = DOUYIN_PUBLISH_STRATEGY_SCHEDULED if args.schedule else DOUYIN_PUBLISH_STRATEGY_IMMEDIATE
 
@@ -935,6 +1069,7 @@ async def dispatch(args: argparse.Namespace) -> int:
                 publish_strategy=publish_strategy,
                 debug=args.debug,
                 headless=args.headless,
+                collection_name=args.collection,
             )
             await upload_video(request)
             print(f"Douyin video upload submitted: {request.video_file}")
@@ -981,55 +1116,34 @@ async def dispatch(args: argparse.Namespace) -> int:
             print("valid" if is_valid else "invalid")
             return 0 if is_valid else 1
 
-        if args.action == "list-activities":
-            account_file = resolve_account_file("kuaishou", args.account)
-            if not account_file.exists():
-                print(f"错误：cookie 文件不存在，请先 `sau kuaishou login --account {args.account}`", file=sys.stderr)
-                return 1
-            import json as _json
-            activities = await list_kuaishou_activities(str(account_file), headless=args.headless)
-            print(_json.dumps(activities, ensure_ascii=False, indent=2))
-            return 0
-
         publish_strategy = KUAISHOU_PUBLISH_STRATEGY_SCHEDULED if args.schedule else KUAISHOU_PUBLISH_STRATEGY_IMMEDIATE
 
         if args.action == "upload-video":
-            try:
-                extra_tags = resolve_extra_tags("kuaishou", args.extra_tag_pool)
-            except ValueError as exc:
-                print(str(exc), file=sys.stderr)
-                return 1
             request = KuaishouVideoUploadRequest(
                 account_name=args.account,
                 video_file=args.file,
                 title=args.title,
                 description=args.desc,
-                tags=merge_tags(parse_tags(args.tags), extra_tags),
+                tags=parse_tags(args.tags),
                 publish_date=args.schedule or 0,
                 thumbnail_file=args.thumbnail,
-                activity=args.activity,
                 publish_strategy=publish_strategy,
                 debug=args.debug,
                 headless=args.headless,
+                collection_name=args.collection,
             )
             await upload_kuaishou_video(request)
             print(f"Kuaishou video upload submitted: {request.video_file}")
             return 0
 
         if args.action == "upload-note":
-            try:
-                extra_tags = resolve_extra_tags("kuaishou", args.extra_tag_pool)
-            except ValueError as exc:
-                print(str(exc), file=sys.stderr)
-                return 1
             request = KuaishouNoteUploadRequest(
                 account_name=args.account,
                 image_files=parse_image_files(args.images),
                 title=args.title,
                 note=args.note,
-                tags=merge_tags(parse_tags(args.tags), extra_tags),
+                tags=parse_tags(args.tags),
                 publish_date=args.schedule or 0,
-                activity=args.activity,
                 publish_strategy=publish_strategy,
                 debug=args.debug,
                 headless=args.headless,
@@ -1040,72 +1154,7 @@ async def dispatch(args: argparse.Namespace) -> int:
 
         raise RuntimeError(f"Unsupported Kuaishou action: {args.action}")
 
-    if args.platform == "toutiao":
-        if args.action == "login":
-            result = await login_toutiao_account(args.account, headless=args.headless)
-            if not result["success"]:
-                raise RuntimeError(result["message"])
-            print(f"Toutiao login flow completed: {result['account_file']}")
-            return 0
-
-        if args.action == "check":
-            is_valid = await check_toutiao_account(args.account)
-            print("valid" if is_valid else "invalid")
-            return 0 if is_valid else 1
-
-        if args.action == "list-activities":
-            account_file = resolve_account_file("toutiao", args.account)
-            if not account_file.exists():
-                print(f"错误：cookie 文件不存在，请先 `sau toutiao login --account {args.account}`", file=sys.stderr)
-                return 1
-            import json as _json
-            activities = await list_toutiao_activities(str(account_file), headless=args.headless)
-            if not activities:
-                print("# 说明：头条视频发布页当前不提供活动入口（实测），活动功能仅快手支持", file=sys.stderr)
-            print(_json.dumps(activities, ensure_ascii=False, indent=2))
-            return 0
-
-        publish_strategy = TOUTIAO_PUBLISH_STRATEGY_SCHEDULED if args.schedule else TOUTIAO_PUBLISH_STRATEGY_IMMEDIATE
-
-        if args.action == "upload-video":
-            try:
-                extra_tags = resolve_extra_tags("toutiao", args.extra_tag_pool)
-            except ValueError as exc:
-                print(str(exc), file=sys.stderr)
-                return 1
-            request = ToutiaoVideoUploadRequest(
-                account_name=args.account,
-                video_file=args.file,
-                title=args.title,
-                description=args.desc,
-                tags=merge_tags(parse_tags(args.tags), extra_tags),
-                publish_date=args.schedule or 0,
-                thumbnail_file=args.thumbnail,
-                activity=args.activity,
-                declaration=args.declaration,
-                draft=args.draft,
-                publish_strategy=publish_strategy,
-                debug=args.debug,
-                headless=args.headless,
-            )
-            await upload_toutiao_video(request)
-            print(f"Toutiao video upload submitted: {request.video_file}")
-            return 0
-
-        raise RuntimeError(f"Unsupported Toutiao action: {args.action}")
-
     if args.platform == "xiaohongshu":
-        # 2026-09-07: 停用开关只拦高风险的自动化发布;login 由人工扫码、check 为
-        # 只读校验,均为低风险操作,放行(数据采集依赖有效登录态)。
-        if not XIAOHONGSHU_ENABLED and args.action not in ("login", "check"):
-            print(
-                "小红书发布通道已停用：现有浏览器自动化方式在小红书存在较高封号风险（多次实测）。\n"
-                "如需恢复：将 conf.py 的 XIAOHONGSHU_ENABLED 改为 True——但仅在确认有更安全的发布方式之后。\n"
-                "login / check（人工扫码与只读校验）不受此开关限制。",
-                file=sys.stderr,
-            )
-            return 1
-
         if args.action == "login":
             result = await login_xiaohongshu_account(args.account, headless=args.headless)
             if not result["success"]:
@@ -1178,12 +1227,6 @@ async def dispatch(args: argparse.Namespace) -> int:
             print("valid" if is_valid else "invalid")
             return 0 if is_valid else 1
 
-        if args.action == "health":
-            import json as _json
-            report = await health_bilibili_account(args.account, limit=args.limit)
-            print(_json.dumps(report, ensure_ascii=False, indent=2))
-            return 0
-
         if args.action == "upload-video":
             request = BilibiliVideoUploadRequest(
                 account_name=args.account,
@@ -1191,7 +1234,7 @@ async def dispatch(args: argparse.Namespace) -> int:
                 title=args.title,
                 description=args.desc,
                 tid=args.tid,
-                tags=merge_tags(parse_tags(args.tags), resolve_extra_tags("bilibili", args.extra_tag_pool)),
+                tags=parse_tags(args.tags),
                 publish_date=args.schedule or 0,
                 thumbnail_file=args.thumbnail,
             )
@@ -1233,12 +1276,105 @@ async def dispatch(args: argparse.Namespace) -> int:
                 publish_strategy=publish_strategy,
                 debug=args.debug,
                 headless=args.headless,
+                collection_name=args.collection,
             )
             await upload_tencent_video(request)
             print(f"Tencent/WeChat Channels video upload submitted: {request.video_file}")
             return 0
 
         raise RuntimeError(f"Unsupported Tencent/WeChat Channels action: {args.action}")
+
+    if args.platform == "alipay":
+        if args.action == "login":
+            result = await login_alipay_account(args.account, headless=args.headless)
+            if not result["success"]:
+                raise RuntimeError(result["message"])
+            print(f"Alipay login flow completed: {result['account_file']}")
+            return 0
+
+        if args.action == "check":
+            is_valid = await check_alipay_account(args.account)
+            print("valid" if is_valid else "invalid")
+            return 0 if is_valid else 1
+
+        if args.action == "upload-video":
+            request = AlipayVideoUploadRequest(
+                account_name=args.account,
+                video_file=args.file,
+                title=args.title,
+                description=args.desc,
+                tags=parse_tags(args.tags),
+                thumbnail_file=args.thumbnail,
+                collection_name=args.collection,
+                debug=args.debug,
+                headless=args.headless,
+            )
+            await upload_alipay_video(request)
+            print(f"Alipay video upload submitted: {request.video_file}")
+            return 0
+
+        raise RuntimeError(f"Unsupported Alipay action: {args.action}")
+
+    if args.platform == "weibo":
+        if args.action == "login":
+            result = await login_weibo_account(args.account, headless=args.headless)
+            if not result["success"]:
+                raise RuntimeError(result["message"])
+            print(f"Weibo login flow completed: {result['account_file']}")
+            return 0
+
+        if args.action == "check":
+            is_valid = await check_weibo_account(args.account)
+            print("valid" if is_valid else "invalid")
+            return 0 if is_valid else 1
+
+        if args.action == "upload-video":
+            request = WeiboVideoUploadRequest(
+                account_name=args.account,
+                video_file=args.file,
+                title=args.title,
+                description=args.desc,
+                tags=parse_tags(args.tags),
+                thumbnail_file=args.thumbnail,
+                collection_name=args.collection,
+                debug=args.debug,
+                headless=args.headless,
+            )
+            await upload_weibo_video(request)
+            print(f"Weibo video upload submitted: {request.video_file}")
+            return 0
+
+        raise RuntimeError(f"Unsupported Weibo action: {args.action}")
+
+    if args.platform == "hupu":
+        if args.action == "login":
+            result = await login_hupu_account(args.account, headless=args.headless)
+            if not result["success"]:
+                raise RuntimeError(result["message"])
+            print(f"Hupu login flow completed: {result['account_file']}")
+            return 0
+
+        if args.action == "check":
+            is_valid = await check_hupu_account(args.account)
+            print("valid" if is_valid else "invalid")
+            return 0 if is_valid else 1
+
+        if args.action == "upload-video":
+            request = HupuVideoUploadRequest(
+                account_name=args.account,
+                video_file=args.file,
+                title=args.title,
+                description=args.desc,
+                tags=parse_tags(args.tags),
+                thumbnail_file=args.thumbnail,
+                debug=args.debug,
+                headless=args.headless,
+            )
+            await upload_hupu_video(request)
+            print(f"Hupu video upload submitted: {request.video_file}")
+            return 0
+
+        raise RuntimeError(f"Unsupported Hupu action: {args.action}")
 
     if args.platform == "youtube":
         if args.action == "login":
@@ -1271,6 +1407,37 @@ async def dispatch(args: argparse.Namespace) -> int:
             return 0
 
         raise RuntimeError(f"Unsupported YouTube action: {args.action}")
+
+    if args.platform == "baijiahao":
+        if args.action == "login":
+            result = await login_baijiahao_account(args.account, headless=args.headless)
+            if not result["success"]:
+                raise RuntimeError(result["message"])
+            print(f"Baijiahao login flow completed: {result['account_file']}")
+            return 0
+
+        if args.action == "check":
+            is_valid = await check_baijiahao_account(args.account)
+            print("valid" if is_valid else "invalid")
+            return 0 if is_valid else 1
+
+        if args.action == "upload-video":
+            request = BaijiahaoVideoUploadRequest(
+                account_name=args.account,
+                video_file=args.file,
+                title=args.title,
+                description=args.desc,
+                tags=parse_tags(args.tags),
+                thumbnail_file=args.thumbnail,
+                collection_name=args.collection,
+                debug=args.debug,
+                headless=args.headless,
+            )
+            await upload_baijiahao_video(request)
+            print(f"Baijiahao video upload submitted: {request.video_file}")
+            return 0
+
+        raise RuntimeError(f"Unsupported Baijiahao action: {args.action}")
 
     raise RuntimeError(f"Unsupported platform: {args.platform}")
 

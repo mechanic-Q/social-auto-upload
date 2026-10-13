@@ -19,6 +19,17 @@ class DouyinDeclarationTests(unittest.TestCase):
         video = DouYinVideo("标题", "/tmp/demo.mp4", [], 0, "/tmp/cookie.json")
         self.assertIsNone(video.declaration)
 
+    def test_legacy_positional_runtime_flags_keep_their_meaning(self):
+        video = DouYinVideo(
+            "标题", "/tmp/demo.mp4", [], 0, "/tmp/cookie.json",
+            None, "", "", None, "",
+            "scheduled", False, False,
+        )
+        self.assertEqual(video.publish_strategy, "scheduled")
+        self.assertFalse(video.debug)
+        self.assertFalse(video.headless)
+        self.assertIsNone(video.declaration)
+
     def test_apply_declaration_skips_when_unspecified(self):
         video = DouYinVideo("标题", "/tmp/demo.mp4", [], 0, "/tmp/cookie.json")
         video.set_self_declaration = AsyncMock()
