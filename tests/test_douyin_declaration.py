@@ -20,10 +20,12 @@ class DouyinDeclarationTests(unittest.TestCase):
         self.assertIsNone(video.declaration)
 
     def test_legacy_positional_runtime_flags_keep_their_meaning(self):
+        # 上游 2026-10 演进位置序（thumbnail_landscape/productLink/productTitle/
+        # thumbnail_portrait/desc/collection_name 前移）；本测试按当前签名锁位置语义
         video = DouYinVideo(
             "标题", "/tmp/demo.mp4", [], 0, "/tmp/cookie.json",
-            None, "", "", None, "",
-            "scheduled", False, False,
+            None, "", "", None, "", None,
+            "scheduled", False, False, None,
         )
         self.assertEqual(video.publish_strategy, "scheduled")
         self.assertFalse(video.debug)
@@ -68,10 +70,17 @@ class DouyinDeclarationTests(unittest.TestCase):
         locator = MagicMock()
         locator.set_input_files = AsyncMock()
         locator.count = AsyncMock(return_value=1)
+        # 上游 upload 的 .first 链（wait_for attached / set_input_files / count）一次性配齐
+        locator.first = MagicMock(
+            count=AsyncMock(return_value=1),
+            wait_for=AsyncMock(),
+            set_input_files=AsyncMock(),
+        )
         page = MagicMock()
         page.goto = AsyncMock()
         page.wait_for_url = AsyncMock()
         page.wait_for_selector = AsyncMock()
+        page.wait_for_timeout = AsyncMock()  # 上游 upload 新增：进页后身份验证等待
         page.locator.return_value = locator
 
         context = MagicMock()
