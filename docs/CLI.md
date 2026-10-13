@@ -6,9 +6,12 @@
 - `kuaishou`
 - `xiaohongshu`
 - `bilibili`
-- `tencent`（视频号）
+- `tencent`
+- `baijiahao`
+- `alipay`
+- `weibo`
+- `hupu`
 - `youtube`
-- `toutiao`
 
 实现说明：
 
@@ -19,6 +22,8 @@
   - `skills/kuaishou-upload/`
   - `skills/xiaohongshu-upload/`
   - `skills/bilibili-upload/`
+
+视频号、百家号和支付宝生活号目前只有 CLI 入口，暂未提供对应的 skill。
 
 ## 安装 CLI 入口
 
@@ -35,6 +40,12 @@ sau douyin --help
 sau kuaishou --help
 sau xiaohongshu --help
 sau bilibili --help
+sau tencent --help
+sau baijiahao --help
+sau alipay --help
+sau weibo --help
+sau hupu --help
+sau youtube --help
 ```
 
 ## 安装 patchright 浏览器
@@ -55,6 +66,13 @@ sau douyin upload-video --account <account_name> --file videos/demo.mp4 --title 
 sau douyin upload-note --account <account_name> --images videos/1.png videos/2.png --title "图文标题" --note "图文示例" --tags 图文,测试
 ```
 
+抖音短信验证码补充说明：
+
+- 视频发布过程中如果触发短信二次验证，CLI 会优先读取项目根目录下的 `verify_code.txt`
+- 如果未找到 `verify_code.txt`，并且当前命令是在交互式终端中手动运行，CLI 会直接在终端提示输入验证码
+- 对 agent、自动任务、远程桥接这类场景，仍然可以继续用写入 `verify_code.txt` 的方式喂验证码
+- 验证通过后，程序会自动清理 `verify_code.txt`
+
 ## 快手 CLI 子命令
 
 ```bash
@@ -62,29 +80,9 @@ sau kuaishou login --account <account_name>
 sau kuaishou check --account <account_name>
 sau kuaishou upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --tags 运动,训练
 sau kuaishou upload-note --account <account_name> --images videos/1.png videos/2.png videos/3.png --title "图文标题" --note "图文示例" --tags 图文,测试
-sau kuaishou list-activities --account <account_name>
 ```
 
-## 今日头条 CLI 子命令
-
-```bash
-sau toutiao login --account <account_name>
-sau toutiao check --account <account_name>
-sau toutiao upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --tags 科技,人工智能
-sau toutiao list-activities --account <account_name>
-```
-
-- 头条当前仅支持视频发布（`upload-video`），暂无图文/文章；发布走西瓜上传通道
-- 标题必填且不超过 300 字；话题最多 10 个（联想命中平台词库才生效，未命中自动跳过不阻断）
-- `--declaration "AI生成"` 等勾选"作品声明"区的声明项（常见：AI生成/自行拍摄/引用内容/虚构演绎）；
-  勾选失败时发布终止（不静默发布）。该页面无"声明原创"选项（需账号开通原创权益后才可能出现）
-- `--draft` 存草稿不发布（已实测）；`--activity` 在头条视频发布页不可用（实测无活动入口，
-  传了会明确报错终止），活动功能当前仅快手支持
-- 登录支持头条 APP / 抖音 APP 扫码
-
-## 小红书 CLI 子命令（已停用）
-
-> **⛔ 小红书通道已于 2026-09-05 停用**：现有浏览器自动化方式在该平台封号风险过高（多次实测）。调用会返回错误；恢复需将 `conf.py` 的 `XIAOHONGSHU_ENABLED` 改为 `True`。以下命令仅作历史参考。
+## 小红书 CLI 子命令
 
 ```bash
 sau xiaohongshu login --account <account_name>
@@ -104,8 +102,7 @@ SAU_XHS_CREATOR_BASE_URL=https://creator.rednote.com sau xiaohongshu login --acc
 ```bash
 sau bilibili login --account <account_name>
 sau bilibili check --account <account_name>
-sau bilibili upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --tid 249 --tags 足球,测试
-# 内容标签 + 固定活动标签拼满 10 个上限：--extra-tag-pool activity（组清单在 conf.PLATFORM_EXTRA_TAG_POOLS）
+sau bilibili upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --tid 249 --tags 足球,测试 --thumbnail covers/demo.png
 ```
 
 补充说明：
@@ -120,13 +117,80 @@ sau bilibili upload-video --account <account_name> --file videos/demo.mp4 --titl
 - 如果上游 GitHub Release 有更新，运行时会先自动更新
 - `sau bilibili login --account <name>` 建议由用户自己在本地真实终端里执行；如果终端里的二维码显示不完整，可直接打开当前目录下的 `qrcode.png` 扫码
 
+## 视频号 CLI 子命令
+
+```bash
+sau tencent login --account <account_name>
+sau tencent check --account <account_name>
+sau tencent upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --tags 视频号,测试
+```
+
+视频号支持定时发布、草稿、合集和双比例封面：
+
+```bash
+sau tencent upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --schedule "2026-03-24 21:30" --thumbnail-landscape covers/landscape.png --thumbnail-portrait covers/portrait.png --collection "我的合集"
+sau tencent upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --draft
+```
+
+视频号登录和上传依赖浏览器中的登录态。无头模式下如果需要扫码，CLI 会生成临时二维码；需要人工查看页面时可以加 `--headed`。
+
+## 百家号 CLI 子命令
+
+```bash
+sau baijiahao login --account <account_name>
+sau baijiahao check --account <account_name>
+sau baijiahao upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --tags 百家号,测试
+```
+
+百家号当前支持登录、账号检查和视频上传；支持 `--thumbnail` 与 `--collection`，暂不支持 `--schedule`。上传前需要先完成百度账号登录并保存账号文件。
+
+## 支付宝生活号 CLI 子命令
+
+```bash
+sau alipay login --account <account_name>
+sau alipay check --account <account_name>
+sau alipay upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --tags 生活号,测试
+```
+
+支付宝生活号当前支持登录、账号检查和视频上传；支持 `--thumbnail` 与 `--collection`，暂不支持图文上传和 `--schedule`。首次使用前需要在支付宝内容创作后台完成登录，并确认账号已开通生活号内容创作权限。
+
+## YouTube CLI 子命令
+
+```bash
+sau youtube login --account <account_name>
+sau youtube check --account <account_name>
+sau youtube upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --tags tag1,tag2 --playlist "我的系列" --visibility public
+```
+
+YouTube 登录需要在浏览器中完成 Google 账号登录，不使用二维码。`--visibility` 可选 `public`、`unlisted` 或 `private`，`--playlist` 可选。
+
+## 微博 CLI 子命令
+
+```bash
+sau weibo login --account <account_name>
+sau weibo check --account <account_name>
+sau weibo upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --tags 微博,测试 --thumbnail covers/demo.png
+```
+
+微博当前支持登录、账号检查和视频上传；标题最多 30 个字，封面图建议小于 5 MB，暂不支持图文上传和 `--schedule`。
+
+## 虎扑 CLI 子命令
+
+```bash
+sau hupu login --account <account_name>
+sau hupu check --account <account_name>
+sau hupu upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --tags 虎扑,测试 --thumbnail covers/demo.png
+```
+
+虎扑当前支持登录、账号检查和视频上传；标题长度要求为 4–40 个字，暂不支持图文上传和 `--schedule`。虎扑登录可能需要在浏览器中完成 QQ 或手机号登录，需要人工查看页面时可以加 `--headed`。
+
 ## 登录二维码说明
 
-- 抖音、快手、小红书登录过程中，CLI / uploader 可能会生成临时二维码图片
+- 抖音、快手、小红书、视频号、百家号、支付宝生活号、微博和虎扑登录过程中，CLI / uploader 可能会生成临时二维码图片
 - 对普通用户来说，可以直接打开该图片扫码
 - 对可操作本地文件的 agent 来说，不要只把图片路径告诉用户
 - 这类二维码图片本身就是给用户扫码的，agent 应优先直接展示/发送本地图片给用户
-- Bilibili 当前不走这套本地二维码图片托管链路，登录按上面的 Bilibili CLI 说明处理即可
+- Bilibili 和 YouTube 当前不走这套本地二维码图片托管链路，登录按上面的平台说明处理即可
 
 ## 账号巡检（health）
 
@@ -150,37 +214,9 @@ sau bilibili health --account <account_name> [--limit 20]
 
 快手、头条、小红书、视频号的巡检将在各平台 DOM 侦察后接入同一命令形态。
 
-## 创作活动与固定标签
-
-快手与头条支持"发布时参与创作活动"和"固定标签清单"：
-
-```bash
-# 活动发现：列出当前可参加的活动（JSON，只读不发布）
-sau kuaishou list-activities --account <account_name>
-sau toutiao list-activities --account <account_name>
-
-# 活动参与：发布时选中指定活动（活动名需与 list-activities 输出一致）
-sau kuaishou upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --activity "光合计划"
-```
-
-活动注意事项：
-
-- `--activity` 是精确承诺：发布页找不到该活动入口或匹配不到活动名时，发布**终止**而不是静默跳过
-- 只参加与内容真实相关的活动；无关活动会被平台判定为滥用，反而限流
-
-固定标签清单（Extra Tags）：
-
-- 在 `conf.py` 的 `PLATFORM_EXTRA_TAG_POOLS` 里按平台、按内容类型组维护（如 `news`、`tech`）
-- 发布时用 `--extra-tag-pool <组名>`（可重复）把对应组的标签追加在 `--tags` 之后
-- 不传 `--extra-tag-pool` 就不追加——避免把无关热门标签堆到每个视频上触发"滥用话题"限流
-
-```bash
-sau kuaishou upload-video ... --tags 科技 --extra-tag-pool tech --extra-tag-pool news
-```
-
 ## 定时发布
 
-抖音、快手、小红书、头条的图文和视频上传，以及 Bilibili 的视频上传都支持 `--schedule`。只要传了 `--schedule`，CLI 就会自动切换到对应平台的定时发布策略；不传则默认立即发布。
+抖音、快手、小红书、视频号的图文或视频上传，以及 Bilibili 的视频上传支持 `--schedule`。只要传了 `--schedule`，CLI 就会自动切换到对应平台的定时发布策略；不传则默认立即发布。百家号、支付宝生活号、微博和虎扑当前不支持 `--schedule`。
 
 ```bash
 sau douyin upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --schedule "2026-03-24 21:30"
@@ -190,7 +226,7 @@ sau kuaishou upload-note --account <account_name> --images videos/1.png videos/2
 sau xiaohongshu upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --schedule "2026-03-24 21:30"
 sau xiaohongshu upload-note --account <account_name> --images videos/1.png videos/2.png videos/3.png --title "图文标题" --note "图文示例" --schedule "2026-03-24 21:30"
 sau bilibili upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --tid 249 --schedule "2026-03-24 21:30"
-sau toutiao upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --schedule "2026-03-24 21:30"
+sau tencent upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --schedule "2026-03-24 21:30"
 ```
 
 ## 运行时参数
@@ -231,6 +267,8 @@ CLI 将 `debug` 和 `headless` 拆成了两个独立维度：
 - `--thumbnail-landscape`: 4:3 横版封面
 - `--thumbnail-portrait`: 3:4 竖版封面
 - `--thumbnail`: 兼容旧参数，等同于 3:4 竖版封面
+
+视频号、百家号和支付宝生活号支持使用 `--collection` 指定已有合集；百家号和支付宝生活号还支持 `--thumbnail` 指定封面图。
 
 抖音额外支持：
 
@@ -282,7 +320,6 @@ CDP 导出 cookie+localStorage → 组装 storage_state 写回 json → 清理 `
 **持久 profile 已废弃**（`_has_persistent_profile` 恒 False）：profile 存在会遮蔽 json 更新，
 导致「导了新 cookie 仍判失效」。cookie 校验（cookie_auth）导航已放宽到 60s+domcontentloaded，
 5s 硬超时误判有效会话的问题已根治。
-
 
 ## 快手（kuaishou）封面保障定稿路径（2026-09-15）
 

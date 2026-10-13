@@ -90,6 +90,16 @@ class BrowserCliParserTests(unittest.TestCase):
             ])
         self.assertIsNone(args.declaration)
 
+    def test_douyin_request_legacy_positional_runtime_flags_keep_their_meaning(self):
+        request = sau_cli.DouyinVideoUploadRequest(
+            "creator", Path("demo.mp4"), "标题", "简介", [], 0,
+            None, None, None, "", "", "scheduled", False, False,
+        )
+        self.assertEqual(request.publish_strategy, "scheduled")
+        self.assertFalse(request.debug)
+        self.assertFalse(request.headless)
+        self.assertIsNone(request.declaration)
+
     def test_tencent_upload_video_accepts_dual_thumbnail_aspects(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             video_path = Path(tmp_dir) / "demo.mp4"
@@ -191,30 +201,28 @@ class BrowserCliParserTests(unittest.TestCase):
 
 
 class BrowserCliDispatchTests(unittest.TestCase):
-    def test_dispatch_xiaohongshu_blocked_by_default(self):
-        """小红书发布通道默认停用（封号风险），发布动作拦截返回 1；
-        login/check 为人工扫码与只读校验，2026-09-07 起放行（数据采集依赖登录态）。"""
-        for action in ("upload-video", "upload-note"):
-            args = Namespace(platform="xiaohongshu", action=action, account="creator")
-            code = asyncio.run(sau_cli.dispatch(args))
-            self.assertEqual(code, 1, f"action={action} 应被停用闸门拦截")
+    def test_upload_tencent_video_forwards_collection_name_to_uploader(self):
+        request = sau_cli.TencentVideoUploadRequest(
+            account_name="creator",
+            video_file=Path("demo.mp4"),
+            title="视频标题",
+            description="视频简介",
+            tags=["测试"],
+            publish_date=0,
+            collection_name="我的合集",
+        )
 
-    def test_dispatch_xiaohongshu_login_allowed_when_disabled(self):
-        """login（人工扫码）不受停用开关限制。"""
-        with patch(
-            "sau_cli.login_xiaohongshu_account",
-            new=AsyncMock(return_value={"success": True, "account_file": "x"}),
-        ):
-            code = asyncio.run(sau_cli.dispatch(
-                Namespace(platform="xiaohongshu", action="login", account="creator", headless=True)))
-        self.assertEqual(code, 0)
-
-    def test_dispatch_xiaohongshu_check_prints_valid_when_enabled(self):
-        args = Namespace(platform="xiaohongshu", action="check", account="creator")
         with (
-            patch("sau_cli.XIAOHONGSHU_ENABLED", True),
-            patch("sau_cli.check_xiaohongshu_account", new=AsyncMock(return_value=True)),
+            patch("sau_cli.tencent_setup", new=AsyncMock(return_value=True)),
+            patch.object(sau_cli.TencentVideo, "tencent_upload_video", new=AsyncMock()) as mock_upload,
         ):
+            asyncio.run(sau_cli.upload_tencent_video(request))
+
+        mock_upload.assert_awaited_once()
+
+    def test_dispatch_xiaohongshu_check_prints_valid(self):
+        args = Namespace(platform="xiaohongshu", action="check", account="creator")
+        with patch("sau_cli.check_xiaohongshu_account", new=AsyncMock(return_value=True)):
             code = asyncio.run(sau_cli.dispatch(args))
         self.assertEqual(code, 0)
 
@@ -226,10 +234,10 @@ class BrowserCliDispatchTests(unittest.TestCase):
             images=[Path("1.png")],
             title="图文标题",
             note="图文正文",
-            notef=None,
-            bgm=None,
             tags="测试,图文",
             schedule=0,
+            notef="",
+            bgm="",
             debug=False,
             headless=True,
         )
@@ -256,6 +264,7 @@ class BrowserCliDispatchTests(unittest.TestCase):
             product_link="",
             product_title="",
             declaration="已确认声明原文",
+            collection=None,
             debug=False,
             headless=True,
         )
@@ -283,6 +292,7 @@ class BrowserCliDispatchTests(unittest.TestCase):
             short_title=None,
             category=None,
             draft=False,
+            collection=None,
             debug=False,
             headless=True,
         )
@@ -307,10 +317,7 @@ class BrowserCliDispatchTests(unittest.TestCase):
             debug=False,
             headless=False,
         )
-        with (
-            patch("sau_cli.XIAOHONGSHU_ENABLED", True),
-            patch("sau_cli.upload_xiaohongshu_video", new=AsyncMock()) as mock_upload,
-        ):
+        with patch("sau_cli.upload_xiaohongshu_video", new=AsyncMock()) as mock_upload:
             asyncio.run(sau_cli.dispatch(args))
 
         request = mock_upload.await_args.args[0]
@@ -331,10 +338,7 @@ class BrowserCliDispatchTests(unittest.TestCase):
             debug=False,
             headless=True,
         )
-        with (
-            patch("sau_cli.XIAOHONGSHU_ENABLED", True),
-            patch("sau_cli.upload_xiaohongshu_note", new=AsyncMock()) as mock_upload,
-        ):
+        with patch("sau_cli.upload_xiaohongshu_note", new=AsyncMock()) as mock_upload:
             asyncio.run(sau_cli.dispatch(args))
 
         request = mock_upload.await_args.args[0]

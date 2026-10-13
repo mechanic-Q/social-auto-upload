@@ -1,7 +1,7 @@
 # social-auto-upload
 
 `social-auto-upload` 是一个强大的自动化工具，旨在帮助内容创作者和运营者高效地将视频内容一键发布到多个国内外主流社交媒体平台。
-项目实现了对 `抖音`、`Bilibili`、`小红书`、`快手`、`视频号`、`百家号`、`TikTok` 以及 `YouTube` 等平台的视频上传、定时发布等功能。
+项目实现了对 `抖音`、`Bilibili`、`小红书`、`快手`、`视频号`、`百家号`、`支付宝生活号`、`微博`、`虎扑`、`TikTok` 以及 `YouTube` 等平台的视频上传、定时发布等功能。
 结合各平台 `uploader` 模块，您可以轻松配置和扩展支持的平台，并通过示例脚本快速上手。
 
 <img src="media/show/tkupload.gif" alt="tiktok show" width="800"/>
@@ -76,18 +76,18 @@ sau stats trend --only bilibili --external-id BV1xx411c7mD   # 单作品增长�
 
 ## 目录
 
-- [💡 功能特性](#💡功能特性)
-- [💾 安装指南](#💾安装指南)
-- [🤖 AI Agent](#🤖ai-agent)
-- [🏁 快速开始](#🏁快速开始)
-- [🗂️ 重构计划](#🗂️重构计划)
-- [📣 近况说明](#📣近况说明)
-- [🐇 项目背景](#🐇项目背景)
-- [📃 详细文档](#📃详细文档)
-- [🐾 交流与支持](#🐾交流与支持)
-- [🤝 贡献指南](#🤝贡献指南)
-- [📜 许可证](#📜许可证)
-- [⭐ Star History](#⭐Star-History)
+- [💡 功能特性](#功能特性)
+- [💾 安装指南](#安装指南)
+- [🤖 AI Agent](#agent)
+- [🏁 快速开始](#快速开始)
+- [🗂️ 重构计划](#%EF%B8%8F重构计划)
+- [📣 近况说明](#近况说明)
+- [🐇 项目背景](#项目背景)
+- [📃 详细文档](#详细文档)
+- [🐾 交流与支持](#交流与支持)
+- [🤝 贡献指南](#贡献指南)
+- [📜 许可证](#许可证)
+- [⭐ Star History](#star-history)
 
 ## 💡功能特性
 
@@ -96,9 +96,12 @@ sau stats trend --only bilibili --external-id BV1xx411c7mD   # 单作品增长�
 | 抖音 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 当前主线重构最完整 |
 | Bilibili | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | 运行时自动准备 `biliup` |
 | 小红书（浏览器版） | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 浏览器自动化，CLI/Skill 已接入 |
-| 快手 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 浏览器自动化；发布后封面存活核验+编辑页自动补传已内建（`_verify_and_refill_cover`） |
-| 视频号 | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ | 对应 `tencent_uploader`；cookie 走 Windows Chrome CDP 导出单一事实源（`_has_persistent_profile` 已废弃） |
-| 百家号 | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ | 浏览器自动化 |
+| 快手 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 浏览器自动化，CLI/Skill 初版已接入；发布后封面存活核验+编辑页自动补传已内建（`_verify_and_refill_cover`） |
+| 视频号 | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ | 浏览器自动化，对应 `tencent_uploader`；cookie 走 Windows Chrome CDP 导出单一事实源（`_has_persistent_profile` 已废弃） |
+| 百家号 | ✅ | ✅ | ❌ | ❌ | ✅ | ❌ | 浏览器自动化 |
+| 支付宝生活号 | ✅ | ✅ | ❌ | ❌ | ✅ | ❌ | 浏览器自动化，支持生活号视频 |
+| 微博 | ✅ | ✅ | ❌ | ❌ | ✅ | ❌ | 浏览器自动化，标题最多 30 字 |
+| 虎扑 | ✅ | ✅ | ❌ | ❌ | ✅ | ❌ | 浏览器自动化，标题 4–40 字 |
 | TikTok | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ | 当前示例走 Chrome 版实现 |
 | YouTube | ✅ | ✅ | ❌ | ❌ | ✅ | ❌ | 浏览器自动化（Studio），支持加入播放列表/可见性 |
 
@@ -192,7 +195,7 @@ Web 端相关代码仍然保留，但已经不是当前主线，不保证可直�
 
 ### 方式 1：使用 CLI
 
-当前抖音、快手、小红书、Bilibili 已经接入 CLI：
+当前抖音、快手、小红书、Bilibili、视频号、百家号、支付宝生活号、微博和虎扑已经接入 CLI：
 
 ```bash
 sau douyin login --account <account_name>
@@ -214,6 +217,26 @@ sau bilibili login --account <account_name>
 sau bilibili check --account <account_name>
 sau bilibili upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --tid 249
 
+sau tencent login --account <account_name>
+sau tencent check --account <account_name>
+sau tencent upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --tags tag1,tag2
+
+sau baijiahao login --account <account_name>
+sau baijiahao check --account <account_name>
+sau baijiahao upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --tags tag1,tag2
+
+sau alipay login --account <account_name>
+sau alipay check --account <account_name>
+sau alipay upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --tags tag1,tag2
+
+sau weibo login --account <account_name>
+sau weibo check --account <account_name>
+sau weibo upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --tags tag1,tag2
+
+sau hupu login --account <account_name>
+sau hupu check --account <account_name>
+sau hupu upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --tags tag1,tag2
+
 sau youtube login --account <account_name>
 sau youtube check --account <account_name>
 sau youtube upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --tags tag1,tag2 --playlist "我的系列" --visibility public
@@ -230,6 +253,7 @@ sau youtube upload-video --account <account_name> --file videos/demo.mp4 --title
 
 - `creator` 之类的名字只是示例值，真正含义是 `account_name`
 - 一个 `account_name` 对应一个账号文件，可以准备多个账号，也可以按账号名并发执行任务
+- 抖音视频发布若触发短信二次验证，程序会优先读取项目根目录下的 `verify_code.txt`；如果你是在本地交互式终端手动运行 CLI，也可以直接按终端提示输入验证码
 - 浏览器平台统一约定：
 - 视频使用 `title + desc + tags`
 - 图文使用 `title + note + tags`
@@ -253,6 +277,8 @@ sau youtube upload-video --account <account_name> --file videos/demo.mp4 --title
 - `examples/upload_to_kuaishou.py`
 - `examples/upload_video_to_tencent.py`
 - `examples/upload_video_to_baijiahao.py`
+- `examples/get_alipay_cookie.py`
+- `examples/test_alipay_upload.py`
 - `examples/upload_video_to_tiktok.py`
 - `examples/upload_video_to_xiaohongshu.py`
 
@@ -320,6 +346,8 @@ sau youtube upload-video --account <account_name> --file videos/demo.mp4 --title
 4.  Push到您的分支 (`git push origin feature/YourFeature`)。
 5.  创建一个 Pull Request。
 
+提交代码或文档前，请确认您有权提交相关内容，并同意这些贡献按照本项目的 MIT License 发布。提交第三方代码时，请同时说明来源及其适用的许可证。
+
 ## 主要贡献者
 
 <a href="https://github.com/dreammis/social-auto-upload/graphs/contributors">
@@ -334,9 +362,11 @@ sau youtube upload-video --account <account_name> --file videos/demo.mp4 --title
 
 - https://github.com/biliup/biliup
 
+本项目依赖的第三方组件和运行时工具仍受其各自许可证约束。下游发行或集成本项目时，请同时检查并保留相关第三方组件要求的版权、许可证和 NOTICE 声明。
+
 ## 📜许可证
 
-本项目暂时采用 [MIT License](LICENSE) 开源许可证。
+本项目采用 [MIT License](LICENSE) 开源许可证。除第三方组件外，本项目代码可以在遵守该许可证条款的前提下用于商业软件，包括闭源软件。
 
 ## ⭐Star-History
 
@@ -345,4 +375,4 @@ sau youtube upload-video --account <account_name> --file videos/demo.mp4 --title
 
 
 
-[![Star History Chart](https://api.star-history.com/svg?repos=dreammis/social-auto-upload&type=Date)](https://star-history.com/#dreammis/social-auto-upload&Date)
+[![Star History Chart](https://star-history.dera.page/svg?repos=dreammis/social-auto-upload&type=Date)](https://star-history.dera.page/#dreammis/social-auto-upload&Date)
