@@ -192,6 +192,28 @@ sau hupu upload-video --account <account_name> --file videos/demo.mp4 --title "�
 - 这类二维码图片本身就是给用户扫码的，agent 应优先直接展示/发送本地图片给用户
 - Bilibili 和 YouTube 当前不走这套本地二维码图片托管链路，登录按上面的平台说明处理即可
 
+## 账号巡检（health）
+
+抖音与 B站支持只读巡检命令 `health`：登录态抓取账号处罚状态与作品状态、数据，输出 JSON 供 pipeline/agent 判断，不做任何发布操作。
+
+```bash
+sau douyin health --account <account_name> [--limit 30]
+sau bilibili health --account <account_name> [--limit 20]
+```
+
+返回结构：
+
+- `account`：账号维度。抖音含昵称/粉丝/作品数/处罚记录；B站含已发/待审计数
+- `works`：每条作品的状态与数据。抖音含 `flags`（审核中/仅自己可见/禁止播放等标志）、播放/点赞/评论/分享/收藏；B站含 `state`/`state_desc`/拒绝原因与播放数据
+- `summary`：聚合信号——异常状态作品清单、待审清单、被拒清单、播放中位数
+
+判断口径：
+
+- 处罚记录（抖音 `has_punished`）或 `works` 里出现"仅自己可见/禁止播放/被拒"= 平台侧处罚，需按平台申诉流程处理
+- 状态全部正常但播放中位数持续极低 = 低流量池（内容信号问题，不是违规），从封面点击率、前 3 秒留存、内容赛道入手
+
+快手、头条、小红书、视频号的巡检将在各平台 DOM 侦察后接入同一命令形态。
+
 ## 定时发布
 
 抖音、快手、小红书、视频号的图文或视频上传，以及 Bilibili 的视频上传支持 `--schedule`。只要传了 `--schedule`，CLI 就会自动切换到对应平台的定时发布策略；不传则默认立即发布。百家号、支付宝生活号、微博和虎扑当前不支持 `--schedule`。
@@ -281,3 +303,32 @@ Bilibili 额外要求：
 - 小红书：支持多张图片，正文 `--note` 可选，但 `--title` 建议始终显式传入
 
 后续维护 CLI 时，优先看 `sau_cli.py`、`uploader/` 和 `skills/`。
+
+## 视频号（tencent）登录与 cookie 刷新定稿路径（2026-09-15）
+
+> **禁止用 `sau tencent login`（WSL xvfb 扫码）**：二维码 2 分钟过期，无人值守必超时（0915 三连败实证）。
+> 定稿路径 = Windows Chrome 真浏览器登录 + CDP 导出，cookie 单一事实源 = `cookies/tencent_<账号>.json` + `.ua` 侧车。
+
+```bash
+# 一键刷新（9222 不在线时加 --launch 自动拉 Chrome 并打开视频号后台）
+bash /home/lmr/.hermes/skills/video-production/video-pipeline/scripts/tencent_refresh_cookie.sh diyi --launch
+```
+
+流程：Chrome `--remote-debugging-port=9222` 打开视频号后台 → 微信扫码（网页版二维码不过期）→
+CDP 导出 cookie+localStorage → 组装 storage_state 写回 json → 清理 `cookies/tencent_profiles/` 影子 → `sau tencent check`。
+
+**持久 profile 已废弃**（`_has_persistent_profile` 恒 False）：profile 存在会遮蔽 json 更新，
+导致「导了新 cookie 仍判失效」。cookie 校验（cookie_auth）导航已放宽到 60s+domcontentloaded，
+5s 硬超时误判有效会话的问题已根治。
+
+## 快手（kuaishou）封面保障定稿路径（2026-09-15）
+
+> **上传日志「封面已经设置完成」≠ 平台侧封面存活**：0913/0914 两期日志全绿，平台实际展示视频截帧（回落机制未知）。
+
+已固化三层防线：
+
+1. **发布后自动核验**（`ks_uploader.KSVideo`，默认开启）：发布成功等 90s → 管理页抓本条缩略图 → 与 `--thumbnail` 本地封面感知哈希比对（阈值 200）→ 疑似丢失自动进编辑页重传一次（新/旧两版弹窗自适应）→ 提交标志 = POST `rest/cp/works/v2/video/pc/edit/submit`。核验异常不阻塞发布结果，仅打 WARNING。
+2. **存量批量核查**：`python3 tools_ks_cover_audit.py --limit 20 --ref <本地封面.png>`（颜色数判占位 + 可选哈希距离）。
+3. **人工兜底**（自动补传确认失败时）：创作者后台 → 作品管理 → hover 编辑作品 → 编辑封面 → （新版：上传tab直选 file input；旧版 cropper：**先点「清空上传」**再点裁剪区触发 filechooser）→ 3:4 → 完成 → **点编辑页底部「发布」div**（`div._button_3a3lq_1._button-primary_3a3lq_60`，非 button 标签；成功标志=edit/submit POST，页面跳 about:blank 属正常）。
+
+坑：新封面有 CDN 转码期（几分钟内 214x374 纯色占位 725B），核验遇占位等 2-3 分钟再判；「封面应用成功」toast 只是前端状态，不点编辑页「发布」刷新即丢。
